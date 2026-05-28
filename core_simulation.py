@@ -18,6 +18,7 @@ from core_agents import AgentEngine, make_pair
 from core_ablation import AblationConfig, AblationPreset, PRESETS, active_layers_from_config
 from core_metrics import MetricSummary, summarize_state, summarize_traces, rank_layers
 from core_memory import MemoryTrace, IdentitySummary
+from core_allostasis import apply_allostatic_update
 
 
 def clamp(x: float, lo: float, hi: float) -> float:
@@ -31,6 +32,8 @@ class StepRecord:
     agent_a: Dict[str, float]
     agent_b: Dict[str, float]
     user_action: str = ""
+    pre_step_action_a: str = ""
+    pre_step_action_b: str = ""
     mode: str = ""
     event: str = ""
 
@@ -147,15 +150,17 @@ class TheorySimulation:
         self.agent_b.perceive_and_update(inputs_b, note=agent_b_act or str(mode) or current_mode)
 
         # 5) Track attitudes (Agent independently tracks Operator behavior vs Peer behavior)
+
         self.agent_a.update_attitudes(user_action_a, agent_b_act, env_state.stress)
         self.agent_b.update_attitudes(user_action_b, agent_a_act, env_state.stress)
+
+        # 5.5) Apply allostatic tuning before action selection
+        apply_allostatic_update(self.agent_a, self.environment)
+        apply_allostatic_update(self.agent_b, self.environment)
 
         # 6) Action mapping lookup (ALLOW AGENTS TRUE AUTONOMY)
         action_a = self.agent_a.choose_action()
         action_b = self.agent_b.choose_action()
-
-        self.agent_a.state.last_action = action_a
-        self.agent_b.state.last_action = action_b
 
         # 7) Clean Output Serialization (Dead code completely purged)
         rec = StepRecord(
@@ -164,6 +169,8 @@ class TheorySimulation:
             agent_a={**self.agent_a.snapshot(), "chosen_action": action_a.upper()},
             agent_b={**self.agent_b.snapshot(), "chosen_action": action_b.upper()},
             user_action=f"A:{user_action_a} | B:{user_action_b}",
+            pre_step_action_a=agent_a_act,
+            pre_step_action_b=agent_b_act,
             mode=current_mode,
             event=event.name if event is not None else "",
         )

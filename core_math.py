@@ -163,6 +163,7 @@ def affect(x: TheoryInputs, loss: float, pe: float) -> Tuple[float, float]:
     return valence, arousal
 
 
+
 def self_model_depth(
     w: TheoryWeights,
     boundary_integrity_value: float,
@@ -170,16 +171,13 @@ def self_model_depth(
     x: TheoryInputs,
 ) -> float:
     """
-    Self-model depth is a boundary + prediction + memory function.
-
-    S = w_self_from_boundary * boundary_integrity
-      + w_self_from_prediction * (1 - prediction_error)
-      + w_self_from_memory * memory_depth
+    Self-model depth is a boundary + prediction + memory + consistency function.
     """
     value = (
         w.w_self_from_boundary * boundary_integrity_value
         + w.w_self_from_prediction * (1.0 - pe)
         + w.w_self_from_memory * x.memory_depth
+        + w.w_self_from_consistency * x.self_consistency
     )
     return clamp(value, 0.0, 1.0)
 
@@ -187,11 +185,6 @@ def self_model_depth(
 def social_model_depth(w: TheoryWeights, x: TheoryInputs) -> float:
     """
     Social model depth tracks both threat and support because both require modeling others.
-
-    M_social =
-        w_social_from_threat * social_threat
-      + w_social_from_support * social_support
-      + w_social_from_language * language_support
     """
     value = (
         w.w_social_from_threat * x.social_threat

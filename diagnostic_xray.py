@@ -16,7 +16,7 @@ def run_diagnostic():
     # Initialize the simulation engine
     engine = sim.make_simulation(seed=42)
     
-    print(f"{'STEP':<6} | {'MODE':<8} | {'OPERATOR INPUT':<16} | {'AGENT A ACTION':<16} | {'LOSS A':<8} | {'COST A':<8}")
+    print(f"{'STEP':<6} | {'MODE':<8} | {'OPERATOR INPUT':<16} | {'PRE-ACTION':<16} | {'CHOSEN ACTION':<16} | {'LOSS A':<8} | {'COST A':<8}")
     print("-" * 75)
 
     for step_num in range(1, 7):
@@ -43,10 +43,15 @@ def run_diagnostic():
         
         # 4. Extract the mathematical resulting state
         survival_loss_a = record.agent_a.get("survival_loss", 0.0)
-        actual_action_taken = record.agent_a.get("chosen_action", "UNKNOWN")
+        pre_step_action_a = record.pre_step_action_a
+        chosen_action_a = record.agent_a.get("chosen_action", "UNKNOWN")
         
         # 5. Print the frame's telemetry
-        print(f"{step_num:<6} | {current_mode:<8} | {operator_cmd:<16} | {actual_action_taken:<16} | {survival_loss_a:<8.3f} | {expected_cost_a:<8.3f}")
+        print(
+            f"{step_num:<6} | {current_mode:<8} | {operator_cmd:<16} | "
+            f"{pre_step_action_a:<16} | {chosen_action_a:<16} | "
+            f"{survival_loss_a:<8.3f} | {expected_cost_a:<8.3f}"
+        )
 
 if __name__ == "__main__":
     run_diagnostic()

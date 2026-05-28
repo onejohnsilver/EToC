@@ -71,6 +71,7 @@ class TheoryWeights:
     w_self_from_boundary: float = 0.55
     w_self_from_prediction: float = 0.25
     w_self_from_memory: float = 0.20
+    w_self_from_consistency: float = 0.15
 
     w_social_from_threat: float = 0.45
     w_social_from_support: float = 0.45
