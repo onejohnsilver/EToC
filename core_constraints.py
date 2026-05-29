@@ -70,6 +70,7 @@ def sanitize_inputs(x: TheoryInputs) -> TheoryInputs:
         memory_depth=clamp(x.memory_depth, 0.0, 1.0),
         self_consistency=clamp(x.self_consistency, 0.0, 1.0),
         external_uncertainty=clamp(x.external_uncertainty, 0.0, 1.0),
+        peer_prediction_accuracy=clamp(x.peer_prediction_accuracy, 0.0, 1.0),
     )
 
 
@@ -88,6 +89,7 @@ def validate_inputs(x: TheoryInputs) -> ConstraintReport:
         "memory_depth": x.memory_depth,
         "self_consistency": x.self_consistency,
         "external_uncertainty": x.external_uncertainty,
+        "peer_prediction_accuracy": x.peer_prediction_accuracy,
     }
     for name, value in fields.items():
         if not (0.0 <= value <= 1.0):

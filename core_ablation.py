@@ -229,6 +229,7 @@ def zero_inputs_for_ablation(inputs: TheoryInputs, layers: Iterable[LayerName]) 
         memory_depth=(0.0 if "recursion" in disabled else inputs.memory_depth),
         self_consistency=(0.5 if "self_model" in disabled else inputs.self_consistency),
         external_uncertainty=inputs.external_uncertainty,
+        peer_prediction_accuracy=(0.5 if "social_model" in disabled else inputs.peer_prediction_accuracy),
     )
 
 

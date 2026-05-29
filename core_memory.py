@@ -4,20 +4,17 @@ core_memory.py
 
 Persistence layer for the Evolutionary Survival Theory of Consciousness.
 
-This file adds:
-    - memory storage across time
-    - recursive history summaries
-    - identity continuity signals
-    - retrieval of recent state traces
-
-It does not redefine the theory equations.
-It only manages what the system remembers and how memory shapes continuity.
+Modifications for Operator Testing:
+    - Dual-track memory storage (Chronological Queue + Salience Bank).
+    - Affectively weighted recursive history summaries.
+    - Identity continuity signals gated by survival priority and orthogonal cost.
+    - Strict non-breaking compatibility with TheoryState serialization.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence
 
 from core_types import TheoryState
 
@@ -61,18 +58,30 @@ class MemoryBank:
     """
     Persistent memory container.
 
-    The memory bank stores raw traces and maintains a rolling recursive summary.
-    The summary acts like a simple identity model over time.
+    The memory bank utilizes a Dual-Track system:
+    1. A standard rolling chronological window (max_traces).
+    2. A Salience Bank that retains high-threat, high-error events indefinitely 
+       to prevent catastrophic forgetting of survival-critical data.
     """
 
     max_traces: int = 128
+    max_salient: int = 64
     traces: List[MemoryTrace] = field(default_factory=list)
+    salient_traces: List[MemoryTrace] = field(default_factory=list)
     identity: IdentitySummary = field(default_factory=IdentitySummary)
 
     def add_trace(self, trace: MemoryTrace) -> None:
+        # Standard chronological queue
         self.traces.append(trace)
         self.traces = self.traces[-self.max_traces :]
-        self.identity = update_identity(self.identity, self.traces)
+
+        # Salience Bank: Retain high-threat or high-error traces indefinitely.
+        # This acts as the orthogonal priority gate for the agent's prior distributions.
+        if trace.survival_loss > 0.40 or trace.prediction_error > 0.60 or trace.subjective_experience > 0.80:
+            self.salient_traces.append(trace)
+            self.salient_traces = self.salient_traces[-self.max_salient :]
+
+        self.identity = update_identity(self.identity, self.traces, self.salient_traces)
 
     def latest(self) -> Optional[MemoryTrace]:
         return self.traces[-1] if self.traces else None
@@ -80,8 +89,16 @@ class MemoryBank:
     def recent(self, n: int = 5) -> List[MemoryTrace]:
         return self.traces[-max(0, n) :]
 
+    def salient(self, n: int = 5) -> List[MemoryTrace]:
+        """Exposes the most critical survival anchors for predictive allostasis."""
+        return self.salient_traces[-max(0, n) :]
+
     def to_state_memory(self) -> List[Dict[str, float]]:
-        """Convert to the loose dictionary style used by TheoryState.memory."""
+        """
+        Convert to the loose dictionary style used by TheoryState.memory.
+        Strictly serializes ONLY the chronological traces to prevent 
+        breaking expected array sizes in the core engine.
+        """
         return [
             {
                 "step_index": float(t.step_index),
@@ -124,19 +141,30 @@ def make_trace(state: TheoryState, note: str = "") -> MemoryTrace:
 # ============================================================
 
 
-def _mean(values: Sequence[float]) -> float:
-    if not values:
+def _weighted_mean(traces: Sequence[MemoryTrace], extract_fn: Callable[[MemoryTrace], float]) -> float:
+    """
+    Computes an affectively weighted average. 
+    Traces with high survival threat or massive prediction errors exert a 
+    much stronger gravitational pull on the agent's identity and coherence.
+    """
+    if not traces:
         return 0.0
-    return sum(values) / len(values)
+    
+    total_weight = 0.0
+    weighted_sum = 0.0
+    
+    for t in traces:
+        # Base weight of 1.0, scaled exponentially by survival threat and prediction error
+        weight = 1.0 + (t.survival_loss * 5.0) + (t.prediction_error * 3.0)
+        val = extract_fn(t)
+        weighted_sum += val * weight
+        total_weight += weight
+        
+    return weighted_sum / total_weight if total_weight > 0 else 0.0
 
 
 def _trend(values: Sequence[float]) -> float:
-    """
-    Simple signed trend in [-1, 1].
-
-    Positive means increasing over the recent window.
-    Negative means decreasing.
-    """
+    """Simple signed trend in [-1, 1]."""
     if len(values) < 2:
         return 0.0
     start = values[0]
@@ -145,49 +173,45 @@ def _trend(values: Sequence[float]) -> float:
     return max(-1.0, min(1.0, (end - start) / span))
 
 
-def update_identity(identity: IdentitySummary, traces: Sequence[MemoryTrace]) -> IdentitySummary:
+def update_identity(
+    identity: IdentitySummary, 
+    traces: Sequence[MemoryTrace], 
+    salient_traces: Sequence[MemoryTrace] = ()
+) -> IdentitySummary:
     """
-    Update recursive identity continuity from memory.
-
-    The idea:
-        - stable survival and boundary history increase identity stability
-        - consistent self-model and recursion increase continuity
-        - social memory contributes to narratable identity
-        - persistent threat reduces coherence
+    Update recursive identity continuity from memory utilizing affective weighting.
+    Combines recent chronology with permanent salient survival anchors.
     """
     if not traces:
         return IdentitySummary()
 
+    # Pool recent memory with historical salient anchors, removing duplicate step indices
     recent = list(traces[-32:])
-    survival_vals = [t.survival_loss for t in recent]
-    boundary_vals = [t.boundary_integrity for t in recent]
-    self_vals = [t.self_model_depth for t in recent]
-    social_vals = [t.social_model_depth for t in recent]
-    rec_vals = [t.recursive_integration for t in recent]
-    subj_vals = [t.subjective_experience for t in recent]
-    conc_vals = [t.consciousness_index for t in recent]
-    pred_vals = [t.prediction_error for t in recent]
+    combined_pool = {t.step_index: t for t in list(salient_traces) + recent}.values()
+    active_memory = list(combined_pool)
 
-    avg_survival = _mean(survival_vals)
-    avg_boundary = _mean(boundary_vals)
-    avg_self = _mean(self_vals)
-    avg_social = _mean(social_vals)
-    avg_rec = _mean(rec_vals)
-    avg_subj = _mean(subj_vals)
-    avg_conc = _mean(conc_vals)
-    avg_pred = _mean(pred_vals)
+    # Use affectively weighted means instead of flat mathematical smoothing
+    avg_survival = _weighted_mean(active_memory, lambda t: t.survival_loss)
+    avg_boundary = _weighted_mean(active_memory, lambda t: t.boundary_integrity)
+    avg_self = _weighted_mean(active_memory, lambda t: t.self_model_depth)
+    avg_social = _weighted_mean(active_memory, lambda t: t.social_model_depth)
+    avg_rec = _weighted_mean(active_memory, lambda t: t.recursive_integration)
+    avg_subj = _weighted_mean(active_memory, lambda t: t.subjective_experience)
+    avg_conc = _weighted_mean(active_memory, lambda t: t.consciousness_index)
+    avg_pred = _weighted_mean(active_memory, lambda t: t.prediction_error)
 
     stability = max(0.0, min(1.0, 0.55 * avg_boundary + 0.45 * (1.0 / (1.0 + avg_survival))))
     continuity = max(0.0, min(1.0, 0.45 * avg_self + 0.35 * avg_rec + 0.20 * avg_subj))
+    
+    # Coherence sharply drops if prediction errors consistently remain high
     coherence = max(0.0, min(1.0, 0.40 * avg_conc + 0.30 * avg_boundary + 0.30 * (1.0 - avg_pred)))
+    
     trust_history = max(0.0, min(1.0, avg_social))
     threat_history = max(0.0, min(1.0, avg_survival))
 
-    # Recursive narrative strength emerges from stability over time.
     self_narrative = max(0.0, min(1.0, 0.50 * continuity + 0.50 * stability))
     social_narrative = max(0.0, min(1.0, 0.50 * trust_history + 0.50 * coherence))
 
-    # Identity stability combines continuity, coherence, and stability of boundary/survival.
     identity_stability = max(0.0, min(1.0, 0.40 * stability + 0.35 * continuity + 0.25 * coherence))
 
     return IdentitySummary(
@@ -209,9 +233,6 @@ def update_identity(identity: IdentitySummary, traces: Sequence[MemoryTrace]) ->
 class MemoryManager:
     """
     Higher-level memory interface.
-
-    Later modules should use this instead of touching the raw trace list directly.
-    It keeps persistence and identity continuity in one place.
     """
 
     def __init__(self, max_traces: int = 128):
@@ -224,6 +245,10 @@ class MemoryManager:
 
     def recent_traces(self, n: int = 5) -> List[MemoryTrace]:
         return self.bank.recent(n)
+        
+    def salient_traces(self, n: int = 5) -> List[MemoryTrace]:
+        """Provides access to the most severe historical events for active inference."""
+        return self.bank.salient(n)
 
     def identity_summary(self) -> IdentitySummary:
         return self.bank.identity
@@ -232,12 +257,12 @@ class MemoryManager:
         return self.bank.to_state_memory()
 
     def inject_into_state(self, state: TheoryState) -> TheoryState:
-        """Copy memory traces into a TheoryState for compatibility with other files."""
+        """Copy chronological memory traces into a TheoryState."""
         state.memory = self.export_state_memory()
         return state
 
     def sync_from_state(self, state: TheoryState) -> None:
-        """Load state memory into the bank when needed."""
+        """Load state memory into the bank when needed, reconstructing salience."""
         self.bank.traces = [
             MemoryTrace(
                 step_index=int(item.get("step_index", 0.0)),
@@ -253,7 +278,14 @@ class MemoryManager:
             )
             for item in state.memory[-self.bank.max_traces :]
         ]
-        self.bank.identity = update_identity(self.bank.identity, self.bank.traces)
+        
+        # Re-evaluate loaded traces for the salience bank
+        self.bank.salient_traces = [
+            t for t in self.bank.traces 
+            if t.survival_loss > 0.40 or t.prediction_error > 0.60 or t.subjective_experience > 0.80
+        ][-self.bank.max_salient :]
+        
+        self.bank.identity = update_identity(self.bank.identity, self.bank.traces, self.bank.salient_traces)
 
 
 # ============================================================
@@ -270,8 +302,13 @@ def continuity_score(traces: Sequence[MemoryTrace]) -> float:
     social_vals = [t.social_model_depth for t in recent]
     rec_vals = [t.recursive_integration for t in recent]
     subj_vals = [t.subjective_experience for t in recent]
-    return max(0.0, min(1.0, 0.35 * _mean(self_vals) + 0.25 * _mean(social_vals) + 0.25 * _mean(rec_vals) + 0.15 * _mean(subj_vals)))
+    return max(0.0, min(1.0, 0.35 * _mean_standard(self_vals) + 0.25 * _mean_standard(social_vals) + 0.25 * _mean_standard(rec_vals) + 0.15 * _mean_standard(subj_vals)))
 
+def _mean_standard(values: Sequence[float]) -> float:
+    """Standard unweighted mean for simple convenience functions."""
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
 
 def recursion_across_time(traces: Sequence[MemoryTrace]) -> float:
     """Measures whether recursion is sustained across recent time steps."""
@@ -279,4 +316,4 @@ def recursion_across_time(traces: Sequence[MemoryTrace]) -> float:
         return 0.0
     recent = list(traces[-16:])
     rec_vals = [t.recursive_integration for t in recent]
-    return max(0.0, min(1.0, 0.5 * _mean(rec_vals) + 0.5 * max(0.0, _trend(rec_vals))))
+    return max(0.0, min(1.0, 0.5 * _mean_standard(rec_vals) + 0.5 * max(0.0, _trend(rec_vals))))

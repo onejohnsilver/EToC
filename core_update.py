@@ -4,16 +4,11 @@ core_update.py
 
 State-update layer for the Evolutionary Survival Theory of Consciousness.
 
-This file applies the equations from core_math.py step by step to evolve state.
-It does not define the equations themselves.
-It only defines update order, persistence, and memory handling.
-
-Update order:
-    1. Read inputs
-    2. Compute equation outputs in theory order
-    3. Smooth / persist state over time
-    4. Append memory
-    5. Return updated state
+Modifications for Operator Testing:
+    - Integrated MemoryManager from core_memory.py.
+    - Added Allostatic Anticipation: Past trauma from the Salience Bank 
+      now dynamically distorts prediction error, precision, and affect.
+    - Memory routing strictly respects non-breaking TheoryState dictionaries.
 """
 
 from __future__ import annotations
@@ -37,17 +32,13 @@ from core_math import (
     subjective_experience,
     survival_loss,
 )
+# OPERATOR ADDITION: Bring in the new dual-track memory architecture
+from core_memory import MemoryManager
 
 
 class TheoryUpdater:
     """
     Applies the theory math to persistent state.
-
-    The core principle is:
-        inputs -> equations -> evolving state
-
-    The updater is intentionally thin. It orchestrates the order without
-    redefining the math.
     """
 
     def __init__(
@@ -59,6 +50,11 @@ class TheoryUpdater:
         self.weights = weights or TheoryWeights()
         self.config = config or TheoryConfig()
         self.state = initial_state or TheoryState()
+        
+        # Initialize the dynamic memory bank
+        self.memory_manager = MemoryManager(max_traces=self.config.memory_limit)
+        if self.state.memory:
+            self.memory_manager.sync_from_state(self.state)
 
     # --------------------------------------------------------
     # Update logic
@@ -70,16 +66,33 @@ class TheoryUpdater:
         w = self.weights
         s = self.state
 
+        # --- OPERATOR INTERVENTION: Allostatic Anticipation ---
+        # Calculate how much trauma the agent is carrying from the Salience Bank.
+        # This prevents the agent from reacting naively to a dangerous environment.
+        salient_traces = self.memory_manager.salient_traces()
+        allostatic_load = 0.0
+        if salient_traces:
+            # Average the threat and error of permanent traumatic memories
+            allostatic_load = sum(t.survival_loss + t.prediction_error for t in salient_traces) / (2.0 * len(salient_traces))
+
         # 1) Survival / thermodynamic layer
         loss = survival_loss(x, w)
         boundary = boundary_integrity_from_survival_loss(loss)
 
-        # 2) Prediction layer
-        pe = prediction_error(x)
-        precision = predictive_precision(x, boundary)
+        # 2) Prediction layer (Subject to Anticipatory Anxiety)
+        base_pe = prediction_error(x)
+        base_precision = predictive_precision(x, boundary)
+        
+        # Trauma spikes baseline error and shatters precision certainty
+        pe = min(1.0, base_pe + (allostatic_load * 0.40))
+        precision = max(0.0, base_precision - (allostatic_load * 0.35))
 
-        # 3) Affect / valuation layer
-        valence, arousal = affect(x, loss, pe)
+        # 3) Affect / valuation layer (Subject to Orthogonal Pain)
+        base_valence, base_arousal = affect(x, loss, pe)
+        
+        # High allostatic load makes valence more negative and keeps arousal elevated
+        valence = max(-1.0, base_valence - (allostatic_load * 0.30))
+        arousal = min(1.0, base_arousal + (allostatic_load * 0.50))
 
         # 4) Self-model and social model
         self_depth = self_model_depth(w, boundary, pe, x)
@@ -90,7 +103,16 @@ class TheoryUpdater:
 
         # 6) Global integration and subjective experience
         global_int = global_integration(boundary, self_depth, social_depth, recursion)
-        subjective = subjective_experience(w, valence, arousal, pe, self_depth, social_depth, recursion)
+        subjective = subjective_experience(
+            w,
+            valence,
+            arousal,
+            pe,
+            self_depth,
+            social_depth,
+            recursion,
+            x.peer_prediction_accuracy,
+        )
 
         # 7) Consciousness index
         consciousness = consciousness_index(w, subjective, global_int, boundary)
@@ -113,35 +135,22 @@ class TheoryUpdater:
             consciousness_index=_smooth(s.consciousness_index, consciousness),
             global_integration=_smooth(s.global_integration, global_int),
             step_index=s.step_index + 1,
-            memory=[*s.memory],
+            # We clear this temporarily; MemoryManager will inject the formatted list
+            memory=[], 
         )
 
-        # 9) Append a compact memory trace
-        updated.memory.append(
-            {
-                "step_index": float(updated.step_index),
-                "survival_loss": loss,
-                "boundary_integrity": boundary,
-                "prediction_error": pe,
-                "predictive_precision": precision,
-                "affect_valence": valence,
-                "affect_arousal": arousal,
-                "self_model_depth": self_depth,
-                "social_model_depth": social_depth,
-                "recursive_integration": recursion,
-                "global_integration": global_int,
-                "subjective_experience": subjective,
-                "consciousness_index": consciousness,
-            }
-        )
-        updated.memory = updated.memory[-self.config.memory_limit :]
-
-        self.state = updated
+        # 9) Route memory through the manager to evaluate Salience, then inject back
+        self.memory_manager.store(updated)
+        self.state = self.memory_manager.inject_into_state(updated)
+        
         return self.state
 
     def reset(self, state: Optional[TheoryState] = None) -> TheoryState:
         """Reset the evolving state."""
         self.state = state or TheoryState()
+        self.memory_manager = MemoryManager(max_traces=self.config.memory_limit)
+        if self.state.memory:
+            self.memory_manager.sync_from_state(self.state)
         return self.state
 
     def get_state(self) -> TheoryState:
@@ -172,20 +181,34 @@ class TheoryUpdater:
     def ablation_step(self, inputs: TheoryInputs, disabled_layers: Optional[list[LayerName]] = None) -> TheoryState:
         """
         One-step update with selected layers set aside.
-
-        This is intentionally simple: later files can use it to test the role
-        of specific layers without changing the full engine.
         """
         disabled_layers = disabled_layers or []
         x = inputs
         w = self.weights
         s = self.state
+        
+        # Apply the same Allostatic Anticipation to ablation tests
+        salient_traces = self.memory_manager.salient_traces()
+        allostatic_load = 0.0
+        if salient_traces:
+            allostatic_load = sum(t.survival_loss + t.prediction_error for t in salient_traces) / (2.0 * len(salient_traces))
 
         loss = survival_loss(x, w) if "survival" not in disabled_layers else 0.0
         boundary = boundary_integrity_from_survival_loss(loss) if "boundary" not in disabled_layers else 0.0
-        pe = prediction_error(x) if "prediction" not in disabled_layers else 0.0
-        precision = predictive_precision(x, boundary) if "prediction" not in disabled_layers else 0.0
-        valence, arousal = affect(x, loss, pe) if "affect" not in disabled_layers else (0.0, 0.0)
+        
+        base_pe = prediction_error(x) if "prediction" not in disabled_layers else 0.0
+        base_precision = predictive_precision(x, boundary) if "prediction" not in disabled_layers else 0.0
+        
+        pe = min(1.0, base_pe + (allostatic_load * 0.40)) if "prediction" not in disabled_layers else 0.0
+        precision = max(0.0, base_precision - (allostatic_load * 0.35)) if "prediction" not in disabled_layers else 0.0
+        
+        if "affect" not in disabled_layers:
+            base_valence, base_arousal = affect(x, loss, pe)
+            valence = max(-1.0, base_valence - (allostatic_load * 0.30))
+            arousal = min(1.0, base_arousal + (allostatic_load * 0.50))
+        else:
+            valence, arousal = 0.0, 0.0
+            
         self_depth = self_model_depth(w, boundary, pe, x) if "self_model" not in disabled_layers else 0.0
         social_depth = social_model_depth(w, x) if "social_model" not in disabled_layers else 0.0
         recursion = recursive_integration(w, self_depth, social_depth, x) if "recursion" not in disabled_layers else 0.0
@@ -195,7 +218,16 @@ class TheoryUpdater:
             else 0.0
         )
         subjective = (
-            subjective_experience(w, valence, arousal, pe, self_depth, social_depth, recursion)
+            subjective_experience(
+                w,
+                valence,
+                arousal,
+                pe,
+                self_depth,
+                social_depth,
+                recursion,
+                x.peer_prediction_accuracy,
+            )
             if "subjective_experience" not in disabled_layers
             else 0.0
         )
@@ -222,28 +254,12 @@ class TheoryUpdater:
             consciousness_index=_smooth(s.consciousness_index, consciousness),
             global_integration=_smooth(s.global_integration, global_int),
             step_index=s.step_index + 1,
-            memory=[*s.memory],
+            memory=[],
         )
-        updated.memory.append(
-            {
-                "step_index": float(updated.step_index),
-                "survival_loss": loss,
-                "boundary_integrity": boundary,
-                "prediction_error": pe,
-                "predictive_precision": precision,
-                "affect_valence": valence,
-                "affect_arousal": arousal,
-                "self_model_depth": self_depth,
-                "social_model_depth": social_depth,
-                "recursive_integration": recursion,
-                "global_integration": global_int,
-                "subjective_experience": subjective,
-                "consciousness_index": consciousness,
-            }
-        )
-        updated.memory = updated.memory[-self.config.memory_limit :]
 
-        self.state = updated
+        self.memory_manager.store(updated)
+        self.state = self.memory_manager.inject_into_state(updated)
+        
         return self.state
 
 

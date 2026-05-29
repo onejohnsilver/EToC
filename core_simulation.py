@@ -9,7 +9,7 @@ Establishes symmetric, closed-loop multi-agent active inference coupling.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 import random
 
 from core_types import TheoryConfig, TheoryInputs, TheoryState, TheoryWeights
@@ -162,6 +162,12 @@ class TheorySimulation:
         action_a = self.agent_a.choose_action()
         action_b = self.agent_b.choose_action()
 
+        # 6.5) Update mirror models with the actual chosen peer actions
+        if self.agent_a.mirror is not None:
+            self.agent_a.mirror.update_shadow_model(action_b, env_state.stress)
+        if self.agent_b.mirror is not None:
+            self.agent_b.mirror.update_shadow_model(action_a, env_state.stress)
+
         # 7) Clean Output Serialization (Dead code completely purged)
         rec = StepRecord(
             step_index=env_state.step_index,
@@ -207,20 +213,24 @@ class TheorySimulation:
             )
             result.records.append(rec)
 
-        result.final_summary_a = summarize_state(self.agent_a.state.engine_state, self.agent_a.state.memory.identity_summary())
-        result.final_summary_b = summarize_state(self.agent_b.state.engine_state, self.agent_b.state.memory.identity_summary())
-        result.final_identity_a = self.agent_a.state.memory.identity_summary()
-        result.final_identity_b = self.agent_b.state.memory.identity_summary()
+        result.final_summary_a = summarize_state(self.agent_a.state.engine_state, self.agent_a.updater.memory_manager.identity_summary())
+        result.final_summary_b = summarize_state(self.agent_b.state.engine_state, self.agent_b.updater.memory_manager.identity_summary())
+        result.final_identity_a = self.agent_a.updater.memory_manager.identity_summary()
+        result.final_identity_b = self.agent_b.updater.memory_manager.identity_summary()
         return result
 
-    def summarize(self) -> Dict[str, Dict[str, float]]:
-        env = self.environment.snapshot()
-        id_a = self.agent_a.state.memory.identity_summary()
-        id_b = self.agent_b.state.memory.identity_summary()
+    def summarize(self) -> Dict[str, Any]:
+        """
+        Generate a summary of the current simulation state.
+        """
+        # FIX: The memory manager is now in the updater, not the state.
+        id_a = self.agent_a.updater.memory_manager.identity_summary()
+        id_b = self.agent_b.updater.memory_manager.identity_summary()
+        
         return {
-            "environment": env,
-            "agent_a": summarize_state(self.agent_a.state.engine_state, id_a).as_dict(),
-            "agent_b": summarize_state(self.agent_b.state.engine_state, id_b).as_dict(),
+            "environment": f"Step {self.environment.state.step_index} | Stress: {self.environment.state.stress:.2f}",
+            "agent_a": f"Identity(Coherence: {id_a.coherence:.2f}, Stability: {id_a.identity_stability:.2f})",
+            "agent_b": f"Identity(Coherence: {id_b.coherence:.2f}, Stability: {id_b.identity_stability:.2f})",
         }
 
     def traces(self) -> Dict[str, List[MemoryTrace]]:
@@ -231,8 +241,8 @@ class TheorySimulation:
 
     def layer_ranking(self, agent: str = "a") -> List[Tuple[str, float]]:
         if agent.lower() in {"a", "agent_a"}:
-            return rank_layers(self.agent_a.state.engine_state, self.agent_a.state.memory.identity_summary())
-        return rank_layers(self.agent_b.state.engine_state, self.agent_b.state.memory.identity_summary())
+            return rank_layers(self.agent_a.state.engine_state, self.agent_a.updater.memory_manager.identity_summary())
+        return rank_layers(self.agent_b.state.engine_state, self.agent_b.updater.memory_manager.identity_summary())
 
     def reset(self) -> None:
         self.history = []

@@ -3,6 +3,10 @@
 core_agents.py
 
 Agent layer for the Evolutionary Survival Theory of Consciousness.
+
+Operator Modifications:
+    - Integrated TheoryUpdater so agents utilize Allostatic Anticipation.
+    - Centralized MemoryManager inside TheoryUpdater to fix ui.py visibility.
 """
 
 from __future__ import annotations
@@ -12,9 +16,10 @@ import random
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from core_types import TheoryConfig, TheoryInputs, TheoryState, TheoryWeights
-from core_math import compute_all, TheoryMathOutput
+# OPERATOR FIX: Removed compute_all, imported TheoryUpdater
+from core_update import TheoryUpdater 
 from core_constraints import enforce_invariants, sanitize_inputs, sanitize_state
-from core_memory import MemoryManager, MemoryTrace
+from core_memory import MemoryTrace
 from core_environment import EnvironmentEngine, EnvironmentMode
 
 
@@ -71,8 +76,8 @@ class AgentState:
     """Persistent agent state sitting on top of the mathematical theory core."""
     name: str
     profile: AgentProfile
+    # OPERATOR FIX: Memory is now handled entirely by the TheoryUpdater to prevent desyncs
     engine_state: TheoryState = field(default_factory=TheoryState)
-    memory: MemoryManager = field(default_factory=MemoryManager)
 
     trust_in_user: float = 0.50
     trust_in_other: float = 0.50
@@ -100,6 +105,10 @@ class MirrorLayer:
         if self.estimated_stress > 0.60:
             return "withdraw" if self.estimated_caution > 0.60 else "defend"
         return "bond" if self.estimated_stress < 0.30 else "explore"
+
+    @property
+    def prediction_accuracy(self) -> float:
+        return 1.0 - self.social_prediction_error
 
     def update_shadow_model(self, actual_action: str, env_stress: float):
         clean_actual = actual_action.split()[0].lower() if actual_action else "wait"
@@ -137,7 +146,11 @@ class AgentEngine:
         self.name = name
         self.weights = weights or TheoryWeights()
         self.config = config or TheoryConfig(memory_limit=self.profile.memory_span)
+        
         self.state = AgentState(name=name, profile=self.profile)
+        # OPERATOR FIX: Instantiate the Updater here so ui.py can access memory
+        self.updater = TheoryUpdater(weights=self.weights, config=self.config, initial_state=self.state.engine_state)
+        
         self.rng = random.Random(seed)
         self.mirror: Optional[MirrorLayer] = None
 
@@ -160,23 +173,27 @@ class AgentEngine:
         clean_action = self.state.last_action.split()[0].lower() if self.state.last_action else ""
         
         if clean_action == "defend":
-            # Defending structurally blunts direct social threats and caps environmental stress damage
             raw_threat *= 0.40  # 60% threat reduction
             raw_stress *= 0.60  # 40% stress reduction
         elif clean_action == "withdraw":
-            # Withdrawing creates distance, dropping stress significantly but not stopping direct targeted threats as well
             raw_threat *= 0.70  # 30% threat reduction
             raw_stress *= 0.30  # 70% stress reduction
         elif clean_action == "hide":
-            # Hiding breaks line of sight, neutralizing social threat targeting
             raw_threat *= 0.10  # 90% threat reduction
             raw_stress *= 0.80  # 20% stress reduction
 
         # 3. Calculate remaining parameters
         support = clamp(env.opportunity_level * self.profile.support_sensitivity, 0.0, 1.0)
-        memory_depth = clamp(len(self.state.memory.bank.traces) / max(1, self.profile.memory_span), 0.0, 1.0)
+        
+        # OPERATOR FIX: Query memory depth through the updater
+        memory_traces = self.updater.memory_manager.bank.traces
+        memory_depth = clamp(len(memory_traces) / max(1, self.profile.memory_span), 0.0, 1.0)
+        
         self_consistency = clamp(self.state.engine_state.self_model_depth + self.profile.self_model_bias, 0.0, 1.0)
         lang = clamp(language_support + self.profile.language_bias, 0.0, 1.0)
+        peer_accuracy = 0.5
+        if self.mirror is not None:
+            peer_accuracy = clamp(self.mirror.prediction_accuracy, 0.0, 1.0)
 
         # 4. Return shielded inputs to the mathematical core
         return TheoryInputs(
@@ -191,35 +208,22 @@ class AgentEngine:
             memory_depth=memory_depth,
             self_consistency=self_consistency,
             external_uncertainty=env.uncertainty,
+            peer_prediction_accuracy=peer_accuracy,
         )
 
     def perceive_and_update(self, inputs: TheoryInputs, note: str = "") -> TheoryState:
+        """Route the inputs through the TheoryUpdater to activate Allostatic Anticipation."""
         clean_inputs = sanitize_inputs(inputs)
-        self.state.engine_state = sanitize_state(self.state.engine_state)
-
-        output: TheoryMathOutput = compute_all(clean_inputs, self.weights)
-
-        s = self.state.engine_state
-        s.viability = clamp(0.75 * s.viability + 0.25 * (1.0 - 0.50 * output.survival_loss), 0.0, 1.0)
-        s.boundary_integrity = output.boundary_integrity
-        s.thermodynamic_load = 0.75 * s.thermodynamic_load + 0.25 * output.survival_loss
-        s.survival_loss = output.survival_loss
-        s.prediction_error = output.prediction_error
-        s.predictive_precision = output.predictive_precision
-        s.affect_valence = output.affect_valence
-        s.affect_arousal = output.affect_arousal
-        s.self_model_depth = output.self_model_depth
-        s.social_model_depth = output.social_model_depth
-        s.recursive_integration = output.recursive_integration
-        s.language_stability = clean_inputs.language_support
-        s.subjective_experience = output.subjective_experience
-        s.consciousness_index = output.consciousness_index
-        s.global_integration = output.global_integration
-        s.step_index += 1
-
-        self.state.engine_state = enforce_invariants(s)
-        self.state.memory.store(self.state.engine_state, note=note)
-        self.state.engine_state.memory = self.state.memory.export_state_memory()
+        
+        # Sync the updater state with the agent's current engine state (necessary if UI injected values)
+        self.updater.state = enforce_invariants(sanitize_state(self.state.engine_state))
+        
+        # The updater handles the math, smoothing, and memory storage
+        updated_state = self.updater.step(clean_inputs)
+        
+        # Re-sync the agent's state
+        self.state.engine_state = enforce_invariants(updated_state)
+        
         return self.state.engine_state
 
     def update_attitudes(self, user_action: str, other_agent_action: str, env_stress: float) -> None:
@@ -295,9 +299,6 @@ class AgentEngine:
                     if eng.thermodynamic_load > 0.5:
                         expected_loss -= 0.10 * (1.0 + somatic_distress)
 
-                # NEW: Crisis Probing Bonus
-                # If the agent is in a catastrophe (somatic_distress > 0.7), 
-                # reward actions that resolve uncertainty rather than just waiting.
                 if somatic_distress > 0.7:
                     if act in {"explore", "coordinate", "defend", "signal"}:
                         cost -= 0.10 * (somatic_distress - 0.7)
@@ -308,7 +309,6 @@ class AgentEngine:
                     best_action = act
             return best_action
 
-        # Clean, Deduplicated Baseline Fallback Policies
         if self.profile.reactive:
             if eng.survival_loss > 0.75 or eng.affect_arousal > 0.70:
                 return self.rng.choice(["withdraw", "defend", "hide"])
@@ -328,7 +328,8 @@ class AgentEngine:
 
     def generate_report(self) -> str:
         s = self.state.engine_state
-        idn = self.state.memory.identity_summary()
+        # OPERATOR FIX: Query memory through the updater
+        idn = self.updater.memory_manager.identity_summary()
         report = (
             f"{self.name}: loss={s.survival_loss:.3f}, boundary={s.boundary_integrity:.3f}, "
             f"self={s.self_model_depth:.3f}, social={s.social_model_depth:.3f}, "
@@ -340,22 +341,188 @@ class AgentEngine:
 
     def speak(self) -> str:
         s = self.state.engine_state
+        self_depth = s.self_model_depth
+        recursion = s.recursive_integration
+        action = self.state.last_action or "waiting"
+
         if getattr(self.profile, "active_inference", False):
-            msg = f"System executing closed-loop active inference. Strategy footprint: {self.state.last_action.upper()}"
-        elif self.profile.reactive:
-            msg = "I need safety now." if s.survival_loss > 0.75 else "Something is happening." if s.affect_arousal > 0.65 else "I am waiting."
-        else:
-            if s.recursive_integration > 0.60:
-                msg = "I am updating my model of myself and others."
-            elif s.social_model_depth > 0.60:
-                msg = "I am tracking social risk and attachment."
-            elif s.subjective_experience > 0.55:
-                msg = "I feel the state shifting."
+            if self_depth >= 0.65 and recursion >= 0.55:
+                msg = (
+                    f"I am aware of my internal model and my objectives. I am {action}, "
+                    f"my boundary integrity is {s.boundary_integrity:.2f}, and my narrative stays coherent."
+                )
             else:
-                msg = "I am observing the world." 
+                msg = f"System executing closed-loop active inference. Strategy footprint: {action.upper()}"
+        elif self.profile.reactive:
+            if s.survival_loss > 0.75:
+                msg = "Danger. I need safety now."
+            elif s.affect_arousal > 0.65:
+                msg = "Something intense is happening. I am reacting."
+            else:
+                msg = "I am waiting."
+        else:
+            if self_depth >= 0.65:
+                if recursion >= 0.55:
+                    msg = (
+                        f"I understand myself and my current role. I am {action}, "
+                        f"my boundary integrity is {s.boundary_integrity:.2f}, "
+                        "and my narrative remains coherent and self-referential."
+                    )
+                elif recursion >= 0.35:
+                    msg = (
+                        f"I know who I am and what I want, but I am reacting to the moment. "
+                        f"I am {action} while keeping my self-model in mind."
+                    )
+                else:
+                    msg = (
+                        f"I feel my self-model is intact, yet my words are driven by immediate pressure. "
+                        f"I am {action}, and my narrative may jump as I respond."
+                    )
+            elif recursion < 0.45:
+                msg = "Danger. Reacting now. Thoughts are fragmented."
+            else:
+                msg = (
+                    "I am trying to make sense of this, but my self-model is weak. "
+                    "My speech is scattered and more reactive than reflective."
+                )
+
         self.state.dialogue_history.append(msg)
         self.state.dialogue_history = self.state.dialogue_history[-64:]
         return msg
+
+    def get_emotions(self) -> Dict[str, object]:
+        """Classify current emotional context from affect, social, and self-model state."""
+        eng = self.state.engine_state
+        s = self.state
+        labels: List[str] = []
+        valence = eng.affect_valence
+        arousal = eng.affect_arousal
+        threat = eng.survival_loss
+        pred_error = eng.prediction_error
+        trust_other = s.trust_in_other
+        confidence = s.confidence
+        self_depth = eng.self_model_depth
+        social_depth = eng.social_model_depth
+
+        if valence >= 0.65 and arousal <= 0.45:
+            labels.append("content")
+        if valence >= 0.65 and arousal > 0.45:
+            labels.append("enthusiastic")
+        if 0.45 <= valence < 0.65 and arousal > 0.55:
+            labels.append("curious")
+        if valence < 0.45 and arousal > 0.60:
+            if social_depth > 0.50 and trust_other < 0.45:
+                labels.append("embarrassed")
+            elif pred_error > 0.55:
+                labels.append("anxious")
+            elif threat > 0.55:
+                labels.append("afraid")
+            else:
+                labels.append("distressed")
+        if valence < 0.45 and arousal <= 0.60:
+            if social_depth > 0.50 and trust_other < 0.40:
+                labels.append("alienated")
+            else:
+                labels.append("sad")
+        if valence > 0.55 and trust_other > 0.60 and social_depth > 0.55:
+            labels.append("affiliative")
+        if valence > 0.50 and arousal > 0.60 and self_depth > 0.50:
+            labels.append("motivated")
+        if pred_error > 0.60 and arousal > 0.45:
+            labels.append("surprised")
+        if not labels:
+            if arousal > 0.60:
+                labels.append("alert")
+            else:
+                labels.append("neutral")
+
+        return {
+            "emotion_labels": labels,
+            "primary_emotion": labels[0] if labels else "neutral",
+            "affect_valence": valence,
+            "affect_arousal": arousal,
+            "trust_in_other": trust_other,
+            "confidence": confidence,
+            "self_model_depth": self_depth,
+            "social_model_depth": social_depth,
+        }
+
+    def get_layer_state(self, layer_name: str) -> Dict[str, float]:
+        """Return a small state dictionary for a named theory layer."""
+        clean = layer_name.strip().lower()
+        eng = self.state.engine_state
+        if clean in {"survival", "survival_loss"}:
+            return {
+                "viability": eng.viability,
+                "boundary_integrity": eng.boundary_integrity,
+                "thermodynamic_load": eng.thermodynamic_load,
+                "survival_loss": eng.survival_loss,
+            }
+        if clean in {"prediction", "prediction_error"}:
+            return {
+                "prediction_error": eng.prediction_error,
+                "predictive_precision": eng.predictive_precision,
+            }
+        if clean in {"affect", "emotion", "affect_valence"}:
+            return {
+                "affect_valence": eng.affect_valence,
+                "affect_arousal": eng.affect_arousal,
+            }
+        if clean in {"self", "self_model", "self_model_depth"}:
+            return {
+                "self_model_depth": eng.self_model_depth,
+                "self_consistency": self.state.confidence,
+            }
+        if clean in {"social", "social_model_depth"}:
+            return {
+                "social_model_depth": eng.social_model_depth,
+                "trust_in_other": self.state.trust_in_other,
+                "attachment": self.state.attachment,
+            }
+        if clean in {"recursion", "recursive", "recursive_integration"}:
+            return {
+                "recursive_integration": eng.recursive_integration,
+                "curiosity": self.state.curiosity,
+            }
+        if clean in {"language", "language_stability"}:
+            return {
+                "language_stability": eng.language_stability,
+                "language_support_bias": self.profile.language_bias,
+            }
+        if clean in {"subjective", "subjective_experience"}:
+            return {
+                "subjective_experience": eng.subjective_experience,
+                "consciousness_index": eng.consciousness_index,
+            }
+        if clean in {"consciousness", "consciousness_index"}:
+            return {
+                "consciousness_index": eng.consciousness_index,
+                "global_integration": eng.global_integration,
+            }
+        if clean in {"emotion", "emotions"}:
+            emotion_data = self.get_emotions()
+            return {
+                "primary_emotion": emotion_data["primary_emotion"],
+                "emotion_labels": ", ".join(emotion_data["emotion_labels"]),
+                "affect_valence": emotion_data["affect_valence"],
+                "affect_arousal": emotion_data["affect_arousal"],
+                "trust_in_other": emotion_data["trust_in_other"],
+                "confidence": emotion_data["confidence"],
+            }
+        if clean in {"memory", "memories"}:
+            bank = self.updater.memory_manager.bank
+            return {
+                "memory_depth": len(bank.traces),
+                "salient_count": len(bank.salient_traces),
+            }
+        if clean in {"trust", "trust_in_user", "trust_in_other"}:
+            return {
+                "trust_in_user": self.state.trust_in_user,
+                "trust_in_other": self.state.trust_in_other,
+            }
+        if clean == "mood":
+            return {"mood": self.state.mood, "confidence": self.state.confidence}
+        raise KeyError(f"No layer state available for '{layer_name}'")
 
     def snapshot(self) -> Dict[str, float]:
         s = self.state
@@ -383,13 +550,18 @@ class AgentEngine:
             base_snap["tom_estimated_peer_caution"] = self.mirror.estimated_caution
         else:
             base_snap.update({"tom_social_pe": 0.0, "tom_estimated_peer_stress": 0.0, "tom_estimated_peer_caution": 0.0})
+        emotion_data = self.get_emotions()
+        base_snap["emotion_labels"] = ", ".join(emotion_data["emotion_labels"])
+        base_snap["primary_emotion"] = emotion_data["primary_emotion"]
         return base_snap
 
     def recent_memories(self, n: int = 5) -> List[MemoryTrace]:
-        return self.state.memory.recent_traces(n)
+        # OPERATOR FIX: Query memory through the updater
+        return self.updater.memory_manager.recent_traces(n)
 
     def reset(self) -> None:
         self.state = AgentState(name=self.name, profile=self.profile)
+        self.updater.reset()
 
 
 def make_agent(name: str, profile_name: str = "hybrid", seed: Optional[int] = None) -> AgentEngine:

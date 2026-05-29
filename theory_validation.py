@@ -149,11 +149,11 @@ def run_trial(config: TrialConfig) -> TrialResult:
     # Final summaries.
     summary_a = result.final_summary_a or summarize_state(
         sim.agent_a.state.engine_state,
-        sim.agent_a.state.memory.identity_summary(),
+        sim.agent_a.updater.memory_manager.identity_summary(),
     )
     summary_b = result.final_summary_b or summarize_state(
         sim.agent_b.state.engine_state,
-        sim.agent_b.state.memory.identity_summary(),
+        sim.agent_b.updater.memory_manager.identity_summary(),
     )
 
     # Memory-based averages.
@@ -194,8 +194,8 @@ def run_trial(config: TrialConfig) -> TrialResult:
         agent_b_overall=summary_b.overall_adaptation_score,
         avg_agent_a_consciousness=float(avg_a.get("avg_consciousness_index", 0.0)),
         avg_agent_b_consciousness=float(avg_b.get("avg_consciousness_index", 0.0)),
-        avg_agent_a_identity=float(sim.agent_a.state.memory.identity_summary().identity_stability),
-        avg_agent_b_identity=float(sim.agent_b.state.memory.identity_summary().identity_stability),
+        avg_agent_a_identity=float(sim.agent_a.updater.memory_manager.identity_summary().identity_stability),
+        avg_agent_b_identity=float(sim.agent_b.updater.memory_manager.identity_summary().identity_stability),
         avg_agent_a_survival_loss=float(avg_a.get("avg_survival_loss", 0.0)),
         avg_agent_b_survival_loss=float(avg_b.get("avg_survival_loss", 0.0)),
         last_agent_a_recursion=sim.agent_a.state.engine_state.recursive_integration,

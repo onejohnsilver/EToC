@@ -12,7 +12,7 @@ Every later file should import these types and build on them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Tuple, get_args, cast
 
 
 LayerName = Literal[
@@ -26,6 +26,22 @@ LayerName = Literal[
     "subjective_experience",
     "consciousness",
 ]
+
+# Dynamically extract literal strings for runtime validation
+VALID_LAYERS = get_args(LayerName)
+
+def validate_layers(*layers: str) -> Tuple[LayerName, ...]:
+    """
+    Type-safe builder to validate strings and explicitly cast them to Tuple[LayerName, ...].
+    Use this in downstream files (like core_ablation.py or core_simulation.py) 
+    to prevent Pylance type-checking errors when assigning dynamic layers.
+    """
+    validated = []
+    for layer in layers:
+        if layer not in VALID_LAYERS:
+            raise ValueError(f"[ARCHITECTURE FAULT] Invalid layer: '{layer}'. Must be one of {VALID_LAYERS}")
+        validated.append(cast(LayerName, layer))
+    return tuple(validated)
 
 
 @dataclass(frozen=True)
@@ -48,6 +64,7 @@ class TheoryInputs:
     memory_depth: float = 0.0
     self_consistency: float = 0.5
     external_uncertainty: float = 0.0
+    peer_prediction_accuracy: float = 0.5
 
 
 @dataclass
@@ -76,6 +93,7 @@ class TheoryWeights:
     w_social_from_threat: float = 0.45
     w_social_from_support: float = 0.45
     w_social_from_language: float = 0.10
+    w_social_from_peer_prediction: float = 0.15
 
     w_recursion_self: float = 0.40
     w_recursion_social: float = 0.35
@@ -85,6 +103,7 @@ class TheoryWeights:
     w_subjective_prediction: float = 0.20
     w_subjective_self: float = 0.20
     w_subjective_social: float = 0.15
+    w_subjective_peer_prediction: float = 0.05
     w_subjective_recursion: float = 0.15
 
     w_consciousness_subjective: float = 0.45

@@ -4,23 +4,10 @@ core_math.py
 
 Precise equation layer for the Evolutionary Survival Theory of Consciousness.
 
-This file contains the theory math only.
-It does not define the simulation loop, environment, or agent behavior.
-It takes TheoryInputs and TheoryWeights from core_types.py and returns
-layer values that later files can assemble into state updates.
-
-Equation order:
-    1. Survival loss
-    2. Boundary integrity
-    3. Prediction error
-    4. Predictive precision
-    5. Affect (valence + arousal)
-    6. Self-model depth
-    7. Social model depth
-    8. Recursive integration
-    9. Global integration
-    10. Subjective experience proxy
-    11. Consciousness index
+Operator Modifications:
+    - Implemented Orthogonal Costing in the Affect layer. 
+      Extreme physical or social pain now acts as a non-reducible priority gate,
+      overriding standard linear valuation.
 """
 
 from __future__ import annotations
@@ -92,16 +79,6 @@ class TheoryMathOutput:
 def survival_loss(x: TheoryInputs, w: TheoryWeights) -> float:
     """
     Thermodynamic / survival constraint.
-
-    L_survival =
-        w_homeostasis * homeostatic_deviation
-      + w_environment * environmental_stress
-      + w_prediction_error * |prediction_target - observed_state|
-      + w_action_cost * action_cost
-      + w_social_threat * social_threat
-      - w_social_support * social_support
-      - w_language * language_support
-      - w_memory * memory_depth
     """
     x = x
     return (
@@ -119,11 +96,6 @@ def survival_loss(x: TheoryInputs, w: TheoryWeights) -> float:
 def boundary_integrity_from_survival_loss(loss: float) -> float:
     """
     Boundary integrity is an inverse transform of survival loss.
-
-    B = sigmoid(2.5 * (0.5 - loss))
-
-    High loss -> weak boundary integrity.
-    Low loss -> strong boundary integrity.
     """
     return clamp(sigmoid(2.5 * (0.5 - loss)), 0.0, 1.0)
 
@@ -137,8 +109,6 @@ def predictive_precision(x: TheoryInputs, boundary_integrity_value: float) -> fl
     """
     Predictive precision is increased by stable boundary integrity and memory,
     and decreased by external uncertainty.
-
-    P = 0.50*boundary_integrity + 0.25*memory_depth + 0.25*(1 - external_uncertainty)
     """
     precision = (
         0.50 * boundary_integrity_value
@@ -152,16 +122,27 @@ def affect(x: TheoryInputs, loss: float, pe: float) -> Tuple[float, float]:
     """
     Affect is split into valence and arousal.
 
-    Valence:
-        V = 1 - clamp(0.55*loss + 0.45*social_threat, 0, 1.5)
-
-    Arousal:
-        A = clamp(0.45*environmental_stress + 0.35*prediction_error + 0.20*social_threat, 0, 1)
+    OPERATOR MODIFICATION: Orthogonal Priority Gating
+    Pain (physical or social) acts as an independently effective, non-reducible cost signal.
+    If either threat exceeds a threshold, it forces the valence deeply negative, 
+    preventing the agent from "averaging out" severe trauma.
     """
-    valence = 1.0 - clamp(0.55 * loss + 0.45 * x.social_threat, 0.0, 1.5)
-    arousal = clamp(0.45 * x.environmental_stress + 0.35 * pe + 0.20 * x.social_threat, 0.0, 1.0)
-    return valence, arousal
+    # 1. Calculate standard linear valence
+    base_valence = 1.0 - clamp(0.55 * loss + 0.45 * x.social_threat, 0.0, 1.5)
+    
+    # 2. Apply Orthogonal Cost Override
+    # If loss (physical pain) or social_threat (social pain) is critical, it overrides the average.
+    orthogonal_cost = max(loss, x.social_threat)
+    if orthogonal_cost > 0.60:
+        # Exponentially pull valence downward as orthogonal cost approaches 1.0
+        valence = clamp(base_valence - (orthogonal_cost ** 2), -1.0, 1.0)
+    else:
+        valence = clamp(base_valence, -1.0, 1.0)
 
+    # Arousal spikes exponentially with prediction error and environmental stress
+    arousal = clamp(0.45 * x.environmental_stress + 0.35 * pe + 0.20 * x.social_threat, 0.0, 1.0)
+    
+    return valence, arousal
 
 
 def self_model_depth(
@@ -190,6 +171,7 @@ def social_model_depth(w: TheoryWeights, x: TheoryInputs) -> float:
         w.w_social_from_threat * x.social_threat
         + w.w_social_from_support * x.social_support
         + w.w_social_from_language * x.language_support
+        + w.w_social_from_peer_prediction * x.peer_prediction_accuracy
     )
     return clamp(value, 0.0, 1.0)
 
@@ -202,10 +184,6 @@ def recursive_integration(
 ) -> float:
     """
     Recursion is self-modeling about self-modeling, strengthened by language and memory.
-
-    R = w_recursion_self * self_model
-      + w_recursion_social * social_model
-      + w_recursion_language * (0.5*language_support + 0.5*memory_depth)
     """
     value = (
         w.w_recursion_self * self_model_value
@@ -223,8 +201,6 @@ def global_integration(
 ) -> float:
     """
     A structural fusion score across the main layers.
-
-    G = 0.25*boundary + 0.25*self + 0.20*social + 0.30*recursion
     """
     value = (
         0.25 * boundary_integrity_value
@@ -243,14 +219,10 @@ def subjective_experience(
     self_model_value: float,
     social_model_value: float,
     recursive_value: float,
+    peer_prediction_accuracy: float = 0.5,
 ) -> float:
     """
     Proxy for felt first-person integration.
-
-    First convert affect into a bad-to-good load term:
-        affect_component = 0.5*(1 - valence) + 0.5*arousal
-
-    Then integrate with prediction, self, social, and recursion.
     """
     affect_component = 0.50 * (1.0 - affect_valence_value) + 0.50 * affect_arousal_value
     value = (
@@ -258,6 +230,7 @@ def subjective_experience(
         + w.w_subjective_prediction * pe
         + w.w_subjective_self * self_model_value
         + w.w_subjective_social * social_model_value
+        + w.w_subjective_peer_prediction * peer_prediction_accuracy
         + w.w_subjective_recursion * recursive_value
     )
     return clamp(value, 0.0, 1.0)
@@ -271,10 +244,6 @@ def consciousness_index(
 ) -> float:
     """
     Final consciousness score.
-
-    C = w_subjective * subjective_experience
-      + w_global * global_integration
-      + w_boundary * boundary_integrity
     """
     value = (
         w.w_consciousness_subjective * subjective_value
@@ -300,7 +269,16 @@ def compute_all(x: TheoryInputs, w: TheoryWeights) -> TheoryMathOutput:
     social_depth = social_model_depth(w, x)
     recursion = recursive_integration(w, self_depth, social_depth, x)
     global_int = global_integration(boundary, self_depth, social_depth, recursion)
-    subjective = subjective_experience(w, valence, arousal, pe, self_depth, social_depth, recursion)
+    subjective = subjective_experience(
+        w,
+        valence,
+        arousal,
+        pe,
+        self_depth,
+        social_depth,
+        recursion,
+        x.peer_prediction_accuracy,
+    )
     consciousness = consciousness_index(w, subjective, global_int, boundary)
 
     return TheoryMathOutput(
