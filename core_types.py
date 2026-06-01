@@ -61,10 +61,18 @@ class TheoryInputs:
     social_support: float = 0.0
     language_support: float = 0.0
     action_cost: float = 0.0
+    metabolic_reserve: float = 1.0
+    hydration: float = 1.0
+    oxygenation: float = 1.0
+    immune_load: float = 0.0
+    neural_energy: float = 1.0
     memory_depth: float = 0.0
     self_consistency: float = 0.5
     external_uncertainty: float = 0.0
     peer_prediction_accuracy: float = 0.5
+    goal_urgency: float = 0.0
+    goal_alignment: float = 0.5
+    meta_accuracy: float = 0.5
 
 
 @dataclass
@@ -80,6 +88,11 @@ class TheoryWeights:
     w_environment: float = 0.8
     w_prediction_error: float = 0.9
     w_action_cost: float = 0.35
+    w_metabolic_deficit: float = 0.55
+    w_hydration_deficit: float = 0.35
+    w_oxygenation_deficit: float = 0.65
+    w_immune_load: float = 0.30
+    w_neural_energy_deficit: float = 0.50
     w_social_threat: float = 0.7
     w_social_support: float = 0.45
     w_language: float = 0.35

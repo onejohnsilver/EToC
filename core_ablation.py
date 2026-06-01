@@ -226,10 +226,18 @@ def zero_inputs_for_ablation(inputs: TheoryInputs, layers: Iterable[LayerName]) 
         social_support=(0.0 if "social_model" in disabled else inputs.social_support),
         language_support=(0.0 if "subjective_experience" in disabled else inputs.language_support),
         action_cost=inputs.action_cost,
+        metabolic_reserve=inputs.metabolic_reserve,
+        hydration=inputs.hydration,
+        oxygenation=inputs.oxygenation,
+        immune_load=inputs.immune_load,
+        neural_energy=inputs.neural_energy,
         memory_depth=(0.0 if "recursion" in disabled else inputs.memory_depth),
         self_consistency=(0.5 if "self_model" in disabled else inputs.self_consistency),
         external_uncertainty=inputs.external_uncertainty,
         peer_prediction_accuracy=(0.5 if "social_model" in disabled else inputs.peer_prediction_accuracy),
+        goal_urgency=inputs.goal_urgency,
+        goal_alignment=inputs.goal_alignment,
+        meta_accuracy=inputs.meta_accuracy,
     )
 
 

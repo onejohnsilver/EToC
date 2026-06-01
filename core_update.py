@@ -14,13 +14,14 @@ Modifications for Operator Testing:
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from core_types import TheoryConfig, TheoryInputs, TheoryState, TheoryWeights, LayerName
 from core_math import (
     TheoryMathOutput,
     affect,
     boundary_integrity_from_survival_loss,
+    clamp,
     consciousness_index,
     compute_all,
     global_integration,
@@ -50,6 +51,8 @@ class TheoryUpdater:
         self.weights = weights or TheoryWeights()
         self.config = config or TheoryConfig()
         self.state = initial_state or TheoryState()
+        self.regret_history: List[float] = []
+        self.last_regret: float = 0.0
         
         # Initialize the dynamic memory bank
         self.memory_manager = MemoryManager(max_traces=self.config.memory_limit)
@@ -77,26 +80,51 @@ class TheoryUpdater:
 
         # 1) Survival / thermodynamic layer
         loss = survival_loss(x, w)
-        boundary = boundary_integrity_from_survival_loss(loss)
+        # Compose somatic reserve from available inputs and weight by importance
+        somatic_weights = (
+            w.w_metabolic_deficit + w.w_hydration_deficit + w.w_oxygenation_deficit + w.w_neural_energy_deficit
+        )
+        if somatic_weights > 0.0:
+            somatic_reserve = (
+                w.w_metabolic_deficit * x.metabolic_reserve
+                + w.w_hydration_deficit * x.hydration
+                + w.w_oxygenation_deficit * x.oxygenation
+                + w.w_neural_energy_deficit * x.neural_energy
+            ) / somatic_weights
+        else:
+            somatic_reserve = 1.0
+
+        boundary = boundary_integrity_from_survival_loss(loss, somatic_reserve)
 
         # 2) Prediction layer (Subject to Anticipatory Anxiety)
         base_pe = prediction_error(x)
         base_precision = predictive_precision(x, boundary)
         
-        # Trauma spikes baseline error and shatters precision certainty
-        pe = min(1.0, base_pe + (allostatic_load * 0.40))
-        precision = max(0.0, base_precision - (allostatic_load * 0.35))
+        # Gentle allostatic modulation: soft anticipatory bias without permanent ceiling
+        trauma_weight = 0.7 * allostatic_load
+        pe = min(1.0, base_pe + (trauma_weight * 0.05))
+        precision = max(0.0, base_precision - (trauma_weight * 0.04))
 
         # 3) Affect / valuation layer (Subject to Orthogonal Pain)
         base_valence, base_arousal = affect(x, loss, pe)
         
-        # High allostatic load makes valence more negative and keeps arousal elevated
-        valence = max(-1.0, base_valence - (allostatic_load * 0.30))
-        arousal = min(1.0, base_arousal + (allostatic_load * 0.50))
+        # Mild allostatic affect modulation: memories inform caution without crushing resilience
+        # Goal context can soften threat if aligned, or increase pressure if urgency is high.
+        goal_bias = 0.10 * x.goal_alignment - 0.05 * x.goal_urgency
+        valence = max(-1.0, base_valence - (trauma_weight * 0.03) + goal_bias)
+        arousal = min(1.0, base_arousal + (trauma_weight * 0.06) + (0.05 * x.goal_urgency))
 
         # 4) Self-model and social model
-        self_depth = self_model_depth(w, boundary, pe, x)
+        self_depth = clamp(
+            self_model_depth(w, boundary, pe, x)
+            + 0.10 * x.goal_alignment
+            + 0.10 * x.meta_accuracy,
+            0.0,
+            1.0,
+        )
         social_depth = social_model_depth(w, x)
+        epistemic_gate = clamp(1.0 - 0.6 * pe, 0.0, 1.0)
+        social_depth = social_depth * epistemic_gate
 
         # 5) Recursive integration
         recursion = recursive_integration(w, self_depth, social_depth, x)
@@ -112,16 +140,21 @@ class TheoryUpdater:
             social_depth,
             recursion,
             x.peer_prediction_accuracy,
+            boundary,
         )
 
-        # 7) Consciousness index
-        consciousness = consciousness_index(w, subjective, global_int, boundary)
+        # 7) Consciousness index with diminishing amplification from recursion
+        consciousness_base = consciousness_index(w, subjective, global_int, boundary)
+        # Diminishing returns: as base consciousness approaches 1.0, less room to amplify
+        amplification_capacity = max(0.0, 1.0 - consciousness_base)
+        recursion_bonus = 0.10 * recursion * x.meta_accuracy * amplification_capacity
+        consciousness = clamp(consciousness_base + recursion_bonus, 0.0, 1.0)
 
         # 8) Persist the new state with gentle smoothing
         updated = TheoryState(
             viability=_smooth(s.viability, 1.0 - 0.50 * loss),
             boundary_integrity=_smooth(s.boundary_integrity, boundary),
-            thermodynamic_load=_smooth(s.thermodynamic_load, loss),
+            thermodynamic_load=_smooth_adaptive(s.thermodynamic_load, loss),
             survival_loss=loss,
             prediction_error=_smooth(s.prediction_error, pe),
             predictive_precision=_smooth(s.predictive_precision, precision),
@@ -149,12 +182,18 @@ class TheoryUpdater:
         """Reset the evolving state."""
         self.state = state or TheoryState()
         self.memory_manager = MemoryManager(max_traces=self.config.memory_limit)
+        self.regret_history = []
+        self.last_regret = 0.0
         if self.state.memory:
             self.memory_manager.sync_from_state(self.state)
         return self.state
 
     def get_state(self) -> TheoryState:
         return self.state
+
+    def record_regret(self, regret: float) -> None:
+        self.last_regret = clamp(regret, 0.0, 1.0)
+        self.regret_history.append(self.last_regret)
 
     def get_metrics(self) -> Dict[str, float]:
         """Simple metrics view for later tests and visualizations."""
@@ -176,6 +215,8 @@ class TheoryUpdater:
             "consciousness_index": s.consciousness_index,
             "global_integration": s.global_integration,
             "step_index": float(s.step_index),
+            "last_regret": self.last_regret,
+            "average_regret": sum(self.regret_history) / len(self.regret_history) if self.regret_history else 0.0,
         }
 
     def ablation_step(self, inputs: TheoryInputs, disabled_layers: Optional[list[LayerName]] = None) -> TheoryState:
@@ -194,18 +235,36 @@ class TheoryUpdater:
             allostatic_load = sum(t.survival_loss + t.prediction_error for t in salient_traces) / (2.0 * len(salient_traces))
 
         loss = survival_loss(x, w) if "survival" not in disabled_layers else 0.0
-        boundary = boundary_integrity_from_survival_loss(loss) if "boundary" not in disabled_layers else 0.0
+        # ablation: still compute somatic_reserve for boundary unless boundary disabled
+        somatic_weights = (
+            w.w_metabolic_deficit + w.w_hydration_deficit + w.w_oxygenation_deficit + w.w_neural_energy_deficit
+        )
+        if somatic_weights > 0.0:
+            somatic_reserve = (
+                w.w_metabolic_deficit * x.metabolic_reserve
+                + w.w_hydration_deficit * x.hydration
+                + w.w_oxygenation_deficit * x.oxygenation
+                + w.w_neural_energy_deficit * x.neural_energy
+            ) / somatic_weights
+        else:
+            somatic_reserve = 1.0
+
+        boundary = (
+            boundary_integrity_from_survival_loss(loss, somatic_reserve)
+            if "boundary" not in disabled_layers
+            else 0.0
+        )
         
         base_pe = prediction_error(x) if "prediction" not in disabled_layers else 0.0
         base_precision = predictive_precision(x, boundary) if "prediction" not in disabled_layers else 0.0
         
-        pe = min(1.0, base_pe + (allostatic_load * 0.40)) if "prediction" not in disabled_layers else 0.0
-        precision = max(0.0, base_precision - (allostatic_load * 0.35)) if "prediction" not in disabled_layers else 0.0
+        pe = min(1.0, base_pe + (allostatic_load * 0.12)) if "prediction" not in disabled_layers else 0.0
+        precision = max(0.0, base_precision - (allostatic_load * 0.10)) if "prediction" not in disabled_layers else 0.0
         
         if "affect" not in disabled_layers:
             base_valence, base_arousal = affect(x, loss, pe)
-            valence = max(-1.0, base_valence - (allostatic_load * 0.30))
-            arousal = min(1.0, base_arousal + (allostatic_load * 0.50))
+            valence = max(-1.0, base_valence - (allostatic_load * 0.08))
+            arousal = min(1.0, base_arousal + (allostatic_load * 0.15))
         else:
             valence, arousal = 0.0, 0.0
             
@@ -240,7 +299,7 @@ class TheoryUpdater:
         updated = TheoryState(
             viability=_smooth(s.viability, 1.0 - 0.50 * loss),
             boundary_integrity=_smooth(s.boundary_integrity, boundary),
-            thermodynamic_load=_smooth(s.thermodynamic_load, loss),
+            thermodynamic_load=_smooth_adaptive(s.thermodynamic_load, loss),
             survival_loss=loss,
             prediction_error=_smooth(s.prediction_error, pe),
             predictive_precision=_smooth(s.predictive_precision, precision),
@@ -270,4 +329,14 @@ class TheoryUpdater:
 
 def _smooth(previous: float, new_value: float, alpha: float = 0.25) -> float:
     """Exponential smoothing keeps the evolving state stable over time."""
+    return (1.0 - alpha) * previous + alpha * new_value
+
+
+def _smooth_adaptive(previous: float, new_value: float) -> float:
+    """Adaptive exponential smoothing: react faster to large changes.
+
+    Alpha ranges from 0.10 (small changes) up to 0.50 (sudden changes).
+    """
+    delta = abs(new_value - previous)
+    alpha = 0.10 + 0.40 * min(1.0, delta / 0.5)
     return (1.0 - alpha) * previous + alpha * new_value

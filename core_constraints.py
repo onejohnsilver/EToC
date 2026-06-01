@@ -67,10 +67,18 @@ def sanitize_inputs(x: TheoryInputs) -> TheoryInputs:
         social_support=clamp(x.social_support, 0.0, 1.0),
         language_support=clamp(x.language_support, 0.0, 1.0),
         action_cost=clamp(x.action_cost, 0.0, 1.0),
+        metabolic_reserve=clamp(x.metabolic_reserve, 0.0, 1.0),
+        hydration=clamp(x.hydration, 0.0, 1.0),
+        oxygenation=clamp(x.oxygenation, 0.0, 1.0),
+        immune_load=clamp(x.immune_load, 0.0, 1.0),
+        neural_energy=clamp(x.neural_energy, 0.0, 1.0),
         memory_depth=clamp(x.memory_depth, 0.0, 1.0),
         self_consistency=clamp(x.self_consistency, 0.0, 1.0),
         external_uncertainty=clamp(x.external_uncertainty, 0.0, 1.0),
         peer_prediction_accuracy=clamp(x.peer_prediction_accuracy, 0.0, 1.0),
+        goal_urgency=clamp(x.goal_urgency, 0.0, 1.0),
+        goal_alignment=clamp(x.goal_alignment, 0.0, 1.0),
+        meta_accuracy=clamp(x.meta_accuracy, 0.0, 1.0),
     )
 
 
@@ -86,10 +94,18 @@ def validate_inputs(x: TheoryInputs) -> ConstraintReport:
         "social_support": x.social_support,
         "language_support": x.language_support,
         "action_cost": x.action_cost,
+        "metabolic_reserve": x.metabolic_reserve,
+        "hydration": x.hydration,
+        "oxygenation": x.oxygenation,
+        "immune_load": x.immune_load,
+        "neural_energy": x.neural_energy,
         "memory_depth": x.memory_depth,
         "self_consistency": x.self_consistency,
         "external_uncertainty": x.external_uncertainty,
         "peer_prediction_accuracy": x.peer_prediction_accuracy,
+        "goal_urgency": x.goal_urgency,
+        "goal_alignment": x.goal_alignment,
+        "meta_accuracy": x.meta_accuracy,
     }
     for name, value in fields.items():
         if not (0.0 <= value <= 1.0):

@@ -34,6 +34,8 @@ class StepRecord:
     user_action: str = ""
     pre_step_action_a: str = ""
     pre_step_action_b: str = ""
+    agent_a_utterance: str = ""
+    agent_b_utterance: str = ""
     mode: str = ""
     event: str = ""
 
@@ -85,8 +87,10 @@ class TheorySimulation:
         language_support_b: float = 0.0,
     ) -> StepRecord:
         
-        # 1) Advance the environment state parameters
-        env_state = self.environment.step(mode=mode, event=event)
+        # 1) Advance the environment using the agents' prior actions as live world feedback.
+        agent_a_act = self.agent_a.state.last_action
+        agent_b_act = self.agent_b.state.last_action
+        env_state = self.environment.step(mode=mode, event=event, action_a=agent_a_act, action_b=agent_b_act)
         env_snapshot = self.environment.snapshot()
         live_volatility = env_snapshot.get("volatility", 0.5)
         
@@ -120,8 +124,6 @@ class TheorySimulation:
         # 3) Build execution matrices
         # DECOUPLE THE OPERATOR FROM THE AGENT
         # The agent acts physically via its own last_action; the Operator acts via user_action
-        agent_a_act = self.agent_a.state.last_action
-        agent_b_act = self.agent_b.state.last_action
 
         # Combine incoming environmental signals (From the peer agent + the primary operator)
         social_signal_multiplier = 1.2 if current_mode == "crisis" else 1.0
@@ -146,8 +148,16 @@ class TheorySimulation:
         )
 
         # 4) Process mathematical updates through layers
-        self.agent_a.perceive_and_update(inputs_a, note=agent_a_act or str(mode) or current_mode)
-        self.agent_b.perceive_and_update(inputs_b, note=agent_b_act or str(mode) or current_mode)
+        self.agent_a.perceive_and_update(
+            inputs_a,
+            note=agent_a_act or str(mode) or current_mode,
+            disabled_layers=self.ablation.disabled_layers,
+        )
+        self.agent_b.perceive_and_update(
+            inputs_b,
+            note=agent_b_act or str(mode) or current_mode,
+            disabled_layers=self.ablation.disabled_layers,
+        )
 
         # 5) Track attitudes (Agent independently tracks Operator behavior vs Peer behavior)
 
@@ -162,13 +172,21 @@ class TheorySimulation:
         action_a = self.agent_a.choose_action()
         action_b = self.agent_b.choose_action()
 
-        # 6.5) Update mirror models with the actual chosen peer actions
-        if self.agent_a.mirror is not None:
-            self.agent_a.mirror.update_shadow_model(action_b, env_state.stress)
-        if self.agent_b.mirror is not None:
-            self.agent_b.mirror.update_shadow_model(action_a, env_state.stress)
+        # 6.1) Generate spoken peer-aware utterances for current actions
+        utterance_a = self.agent_a.speak(peer_utterance=self.agent_b.state.last_utterance)
+        utterance_b = self.agent_b.speak(peer_utterance=self.agent_a.state.last_utterance)
+        self.agent_a.state.last_utterance = utterance_a
+        self.agent_b.state.last_utterance = utterance_b
 
-        # 7) Clean Output Serialization (Dead code completely purged)
+        # 6.5) Update peer cognitive models with observed behavior
+        self.agent_a.update_peer_model(action_b, utterance_b, env_state.stress)
+        self.agent_b.update_peer_model(action_a, utterance_a, env_state.stress)
+
+        # 7) Apply allostatic tuning before final output
+        apply_allostatic_update(self.agent_a, self.environment)
+        apply_allostatic_update(self.agent_b, self.environment)
+
+        # 8) Clean Output Serialization
         rec = StepRecord(
             step_index=env_state.step_index,
             environment=self.environment.snapshot(),
@@ -177,6 +195,8 @@ class TheorySimulation:
             user_action=f"A:{user_action_a} | B:{user_action_b}",
             pre_step_action_a=agent_a_act,
             pre_step_action_b=agent_b_act,
+            agent_a_utterance=utterance_a,
+            agent_b_utterance=utterance_b,
             mode=current_mode,
             event=event.name if event is not None else "",
         )
@@ -213,8 +233,16 @@ class TheorySimulation:
             )
             result.records.append(rec)
 
-        result.final_summary_a = summarize_state(self.agent_a.state.engine_state, self.agent_a.updater.memory_manager.identity_summary())
-        result.final_summary_b = summarize_state(self.agent_b.state.engine_state, self.agent_b.updater.memory_manager.identity_summary())
+        result.final_summary_a = summarize_state(
+            self.agent_a.state.engine_state,
+            self.agent_a.updater.memory_manager.identity_summary(),
+            self.agent_a.peer_model.prediction_accuracy if getattr(self.agent_a, "peer_model", None) is not None else 0.0,
+        )
+        result.final_summary_b = summarize_state(
+            self.agent_b.state.engine_state,
+            self.agent_b.updater.memory_manager.identity_summary(),
+            self.agent_b.peer_model.prediction_accuracy if getattr(self.agent_b, "peer_model", None) is not None else 0.0,
+        )
         result.final_identity_a = self.agent_a.updater.memory_manager.identity_summary()
         result.final_identity_b = self.agent_b.updater.memory_manager.identity_summary()
         return result
@@ -283,10 +311,11 @@ def _action_cost(action: str) -> float:
         return 0.0
     clean_token = action.split()[0].lower() if isinstance(action, str) else ""
     cost_map = {
-        "wait": 0.02, "observe": 0.02, "explore": 0.08, "plan": 0.10, "reappraise": 0.06,
-        "model_self": 0.08, "signal": 0.04, "coordinate": 0.06, "bond": 0.05, "support": 0.06,
-        "negotiate": 0.07, "seek": 0.05, "seek_alliance": 0.08, "conserve": 0.03,
-        "withdraw": 0.02, "defend": 0.07, "hide": 0.05, "reflect": 0.05
+        "wait": 0.00, "rest": 0.00, "observe": 0.01, "explore": 0.08,
+        "plan": 0.04, "reappraise": 0.02, "model_self": 0.015, "reflect": 0.015,
+        "signal": 0.03, "coordinate": 0.06, "bond": 0.04, "support": 0.05,
+        "negotiate": 0.06, "seek": 0.04, "seek_alliance": 0.07, "conserve": 0.005,
+        "withdraw": 0.02, "defend": 0.07, "hide": 0.04
     }
     return cost_map.get(clean_token, 0.05)
 

@@ -81,11 +81,19 @@ def survival_loss(x: TheoryInputs, w: TheoryWeights) -> float:
     Thermodynamic / survival constraint.
     """
     x = x
+    somatic_load = (
+        w.w_metabolic_deficit * (1.0 - x.metabolic_reserve)
+        + w.w_hydration_deficit * (1.0 - x.hydration)
+        + w.w_oxygenation_deficit * (1.0 - x.oxygenation)
+        + w.w_immune_load * x.immune_load
+        + w.w_neural_energy_deficit * (1.0 - x.neural_energy)
+    )
     return (
         w.w_homeostasis * x.homeostatic_deviation
         + w.w_environment * x.environmental_stress
         + w.w_prediction_error * abs(x.prediction_target - x.observed_state)
         + w.w_action_cost * x.action_cost
+        + somatic_load
         + w.w_social_threat * x.social_threat
         - w.w_social_support * x.social_support
         - w.w_language * x.language_support
@@ -93,11 +101,19 @@ def survival_loss(x: TheoryInputs, w: TheoryWeights) -> float:
     )
 
 
-def boundary_integrity_from_survival_loss(loss: float) -> float:
+def boundary_integrity_from_survival_loss(loss: float, somatic_reserve: float = 1.0) -> float:
     """
-    Boundary integrity is an inverse transform of survival loss.
+    Compute boundary integrity from survival loss and embodied somatic reserve.
+
+    The base boundary depends on survival loss; metabolic/somatic reserve gates
+    the result so physically depleted agents have weaker boundaries.
     """
-    return clamp(sigmoid(2.5 * (0.5 - loss)), 0.0, 1.0)
+    base_boundary = clamp(sigmoid(2.5 * (0.5 - loss)), 0.0, 1.0)
+
+    # Metabolic/somatic gate: at reserve=0 -> gate=0.4; at reserve=1 -> gate=1.0
+    metabolic_gate = clamp(0.4 + 0.6 * somatic_reserve, 0.0, 1.0)
+
+    return base_boundary * metabolic_gate
 
 
 def prediction_error(x: TheoryInputs) -> float:
@@ -220,6 +236,7 @@ def subjective_experience(
     social_model_value: float,
     recursive_value: float,
     peer_prediction_accuracy: float = 0.5,
+    boundary_integrity_value: float = 1.0,
 ) -> float:
     """
     Proxy for felt first-person integration.
@@ -233,6 +250,12 @@ def subjective_experience(
         + w.w_subjective_peer_prediction * peer_prediction_accuracy
         + w.w_subjective_recursion * recursive_value
     )
+
+    # Survival gate: subjective experience is dampened when boundary integrity
+    # is low or prediction error is high. Multiply (not add) to enforce gating.
+    survival_gate = clamp(boundary_integrity_value * 0.70 + (1.0 - pe) * 0.30, 0.0, 1.0)
+    value = value * survival_gate
+
     return clamp(value, 0.0, 1.0)
 
 
@@ -261,7 +284,24 @@ def consciousness_index(
 def compute_all(x: TheoryInputs, w: TheoryWeights) -> TheoryMathOutput:
     """Convenience function that runs the full equation chain in the theory order."""
     loss = survival_loss(x, w)
-    boundary = boundary_integrity_from_survival_loss(loss)
+    # Compose a somatic reserve score from the most relevant physiological signals.
+    somatic_weights = (
+        w.w_metabolic_deficit
+        + w.w_hydration_deficit
+        + w.w_oxygenation_deficit
+        + w.w_neural_energy_deficit
+    )
+    if somatic_weights > 0.0:
+        somatic_reserve = (
+            w.w_metabolic_deficit * x.metabolic_reserve
+            + w.w_hydration_deficit * x.hydration
+            + w.w_oxygenation_deficit * x.oxygenation
+            + w.w_neural_energy_deficit * x.neural_energy
+        ) / somatic_weights
+    else:
+        somatic_reserve = 1.0
+
+    boundary = boundary_integrity_from_survival_loss(loss, somatic_reserve)
     pe = prediction_error(x)
     precision = predictive_precision(x, boundary)
     valence, arousal = affect(x, loss, pe)
@@ -278,6 +318,7 @@ def compute_all(x: TheoryInputs, w: TheoryWeights) -> TheoryMathOutput:
         social_depth,
         recursion,
         x.peer_prediction_accuracy,
+        boundary,
     )
     consciousness = consciousness_index(w, subjective, global_int, boundary)
 

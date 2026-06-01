@@ -39,17 +39,23 @@ def print_help() -> None:
 Commands:
   help                     Show this help menu
   status                   Show full environment and agent summaries
-  emotions <A/B>           View the current emotion labels and affect values for an agent
-  salience <A/B>           [NEW] View the Salience Bank and current Allostatic Load
-  identity <A/B>           [NEW] View affectively weighted Identity Summary & Coherence
+  emotions <A/B>           View emotion labels and affect values for an agent
+  somatic <A/B>            View the agent's somatic state (heart rate, energy, fatigue)
+  transcript <A/B>         View the agent's recent dialogue transcript
+  thoughts <A/B>           View the agent's internal report (cognitive state)
+  salience <A/B>           View the Salience Bank and current Allostatic Load
+  identity <A/B>           View affectively weighted Identity Summary & Coherence
   inspect <A/B> <layer>    Deep dive into a specific Literal layer (e.g., 'survival')
+  peer <A/B>               Inspect the agent's current Theory-of-Mind model of its peer
   speak <A/B>              Hear the agent's current narrative statement
+  narrate <A/B> [full]     Print an autobiographical narrative summary (optional 'full')
+  goals <A/B>              Inspect the agent's current intention and subgoal plan
   calm / stress / crisis   Shift the environmental baseline
   recover                  Reduce stress and restore recovery
   event <name>             Trigger a preset environmental event
   feed / help <A/B>        Provide support to a specific agent
   threaten / isolate <A/B> Apply targeted stress to a specific agent
-  cost <A/B> <value>       [UPDATED] Inject extreme orthogonal cost (pain) to trigger Salience
+  cost <A/B> <value>       Inject extreme orthogonal cost (pain) to trigger Salience
   tune <A/B> <param> <val> Manual state override
   step [N]                 Advance the simulation by N steps (default 1)
   quit                     Exit the sandbox
@@ -78,14 +84,51 @@ def print_simulation_snapshot(sim) -> None:
         print(f"  A: {', '.join(emotions_a['emotion_labels'])} | primary: {emotions_a['primary_emotion']}")
         print(f"  B: {', '.join(emotions_b['emotion_labels'])} | primary: {emotions_b['primary_emotion']}")
 
-def print_agent_dialogue(sim) -> None:
-    print("\n[ COMMUNICATIONS ]")
-    if hasattr(sim.agent_a, "speak"):
-        print("A Outward:", sim.agent_a.speak())
-        print("A Internal Report:", sim.agent_a.generate_report())
-    if hasattr(sim.agent_b, "speak"):
-        print("B Outward:", sim.agent_b.speak())
-        print("B Internal Report:", sim.agent_b.generate_report())
+def _last_agent_utterance(agent: Any) -> str:
+    # Prefer an explicit outward utterance when available
+    if hasattr(agent.state, "last_utterance") and getattr(agent.state, "last_utterance"):
+        return agent.state.last_utterance
+
+    # Fallback: scan dialogue_history for a sensible recent external utterance
+    if hasattr(agent.state, "dialogue_history") and agent.state.dialogue_history:
+        # choose the most recent entry that doesn't look like an internal report
+        for entry in reversed(agent.state.dialogue_history):
+            if not isinstance(entry, str):
+                continue
+            low = entry.strip().lower()
+            if low.startswith("when you said"):
+                continue
+            # avoid returning very long internal dumps; prefer short sentences
+            if len(entry) < 300:
+                return entry
+        # no good candidate found: return the last entry truncated to one sentence
+        last = agent.state.dialogue_history[-1]
+        if isinstance(last, str):
+            return last.split(".")[0]
+    return ""
+
+
+def print_agent_utterances(sim) -> None:
+    """Display only external utterances (clean communication view)."""
+    print("\n[ UTTERANCES ]")
+    a_utterance = sim.agent_a.state.last_utterance if hasattr(sim.agent_a.state, "last_utterance") else ""
+    b_utterance = sim.agent_b.state.last_utterance if hasattr(sim.agent_b.state, "last_utterance") else ""
+
+    if a_utterance or b_utterance:
+        if a_utterance:
+            print(f"  A: {a_utterance}")
+        if b_utterance:
+            print(f"  B: {b_utterance}")
+    else:
+        print("  [No utterances this step]")
+
+def print_agent_thoughts(sim) -> None:
+    """Display internal reports (optional verbose view)."""
+    print("\n[ INTERNAL REPORTS ]")
+    print("  Agent A:")
+    print(f"    {sim.agent_a.generate_report()}")
+    print("  Agent B:")
+    print(f"    {sim.agent_b.generate_report()}")
 
 def get_memory_manager(agent: Any) -> Any:
     """Safely extract the MemoryManager from the agent's updater architecture."""
@@ -111,6 +154,20 @@ def print_emotions(sim, target_agent: str) -> None:
     print(f"  confidence: {data['confidence']:.3f}")
     print(f"  self_model_depth: {data['self_model_depth']:.3f}")
     print(f"  social_model_depth: {data['social_model_depth']:.3f}")
+    if "somatic" in data:
+        som = data["somatic"]
+        print("  somatic:")
+        print(f"    heart_rate: {som['heart_rate']:.3f}")
+        print(f"    muscle_tension: {som['muscle_tension']:.3f}")
+        print(f"    energy: {som['energy']:.3f}")
+        print(f"    fatigue: {som['fatigue']:.3f}")
+        print(f"    temperature: {som['temperature']:.3f}")
+        print(f"    metabolic_reserve: {som.get('metabolic_reserve', 1.0):.3f}")
+        print(f"    hydration: {som.get('hydration', 1.0):.3f}")
+        print(f"    oxygenation: {som.get('oxygenation', 1.0):.3f}")
+        print(f"    immune_load: {som.get('immune_load', 0.0):.3f}")
+        print(f"    neural_energy: {som.get('neural_energy', 1.0):.3f}")
+        print(f"    cognitive_capacity: {som.get('cognitive_capacity', 1.0):.3f}")
 
 def print_salience(sim, target_agent: str) -> None:
     agent = sim.agent_a if target_agent == "a" else sim.agent_b
@@ -158,6 +215,16 @@ def parse_repeat_count(tokens: list[str], repeatable: set[str]) -> tuple[list[st
     return tokens, 1, False
 
 
+def print_transcript(sim, target_agent: str) -> None:
+    agent = sim.agent_a if target_agent == "a" else sim.agent_b
+    print(f"\n[ DIALOGUE TRANSCRIPT | AGENT {target_agent.upper()} ]")
+    if not hasattr(agent.state, "dialogue_history") or not agent.state.dialogue_history:
+        print("  [EMPTY] No dialogue history available.")
+        return
+    for idx, line in enumerate(agent.state.dialogue_history[-12:], start=1):
+        print(f"  {idx:02d}. {line}")
+
+
 def inspect_layer(sim, target_agent: str, layer_name: str) -> None:
     agent = sim.agent_a if target_agent == "a" else sim.agent_b
     try:
@@ -169,6 +236,26 @@ def inspect_layer(sim, target_agent: str, layer_name: str) -> None:
         print(f"\n[INSPECT] Agent {target_agent.upper()} does not currently expose layer states directly.")
     except Exception as exc:
         print(f"\n[INSPECT ERROR] Could not retrieve layer '{layer_name}'. {exc}")
+
+
+def print_peer_model(sim, target_agent: str) -> None:
+    agent = sim.agent_a if target_agent == "a" else sim.agent_b
+    if not hasattr(agent, "peer_model") or agent.peer_model is None:
+        print(f"\n[ERROR] Agent {target_agent.upper()} does not expose a peer cognitive model.")
+        return
+
+    pm = agent.peer_model
+    print(f"\n[ PEER THEORY-OF-MIND | AGENT {target_agent.upper()} ]")
+    print(f"  peer_target: {pm.target_name}")
+    print(f"  prediction_accuracy: {pm.prediction_accuracy:.3f}")
+    print(f"  prediction_error: {pm.prediction_error:.3f}")
+    print(f"  predicted_action: {pm.predicted_action}")
+    print(f"  predicted_utterance: {pm.predicted_utterance}")
+    print(f"  estimated_alignment: {pm.estimated_alignment:.3f}")
+    print(f"  estimated_trust: {pm.estimated_trust:.3f}")
+    print(f"  estimated_stress: {pm.estimated_stress:.3f}")
+    print(f"  estimated_caution: {pm.estimated_caution:.3f}")
+    print(f"  nested_model_depth: {pm.nested_model_depth}")
 
 def initialize_sandbox(seed: Optional[int], preset: str, profile_a: str, profile_b: str) -> Any:
     from core_types import TheoryInputs, TheoryWeights
@@ -219,13 +306,43 @@ def run_interactive(sim) -> None:
                 continue
             elif cmd == "status":
                 print_simulation_snapshot(sim)
-                print_agent_dialogue(sim)
+                print_agent_utterances(sim)
                 continue
             elif cmd == "emotions":
                 if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
                     print("Usage: emotions <A/B>")
                     continue
                 print_emotions(sim, tokens[1])
+                continue
+            elif cmd == "thoughts":
+                if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
+                    print("Usage: thoughts <A/B>")
+                    continue
+                agent = sim.agent_a if tokens[1] == "a" else sim.agent_b
+                print(f"\n[ INTERNAL REPORT | AGENT {tokens[1].upper()} ]")
+                print(agent.generate_report())
+                continue
+            elif cmd == "somatic":
+                if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
+                    print("Usage: somatic <A/B>")
+                    continue
+                agent = sim.agent_a if tokens[1] == "a" else sim.agent_b
+                if not hasattr(agent.state, "somatic"):
+                    print(f"[ERROR] Agent {tokens[1].upper()} has no somatic state exposed.")
+                    continue
+                s = agent.state.somatic
+                print(f"\n[ SOMATIC STATE | AGENT {tokens[1].upper()} ]")
+                print(f"  heart_rate:    {s.heart_rate:.3f}")
+                print(f"  muscle_tension:{s.muscle_tension:.3f}")
+                print(f"  energy:        {s.energy:.3f}")
+                print(f"  fatigue:       {s.fatigue:.3f}")
+                print(f"  temperature:   {s.temperature:.3f}")
+                print(f"  metabolic_reserve:{s.metabolic_reserve:.3f}")
+                print(f"  hydration:     {s.hydration:.3f}")
+                print(f"  oxygenation:   {s.oxygenation:.3f}")
+                print(f"  immune_load:   {s.immune_load:.3f}")
+                print(f"  neural_energy: {s.neural_energy:.3f}")
+                print(f"  capacity:      {s.cognitive_capacity():.3f}")
                 continue
             elif cmd == "salience":
                 if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
@@ -245,6 +362,12 @@ def run_interactive(sim) -> None:
                     continue
                 inspect_layer(sim, tokens[1], tokens[2])
                 continue
+            elif cmd == "peer":
+                if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
+                    print("Usage: peer <A/B>")
+                    continue
+                print_peer_model(sim, tokens[1])
+                continue
             elif cmd == "step":
                 steps = repeat_count if cmd == "step" else (int(tokens[1]) if len(tokens) > 1 else 1)
                 for _ in range(steps):
@@ -261,12 +384,57 @@ def run_interactive(sim) -> None:
                 for _ in range(repeat_count):
                     sim.step(event=get_event(tokens[1]))
                 print(f"[ENVIRONMENT] Triggered event: {tokens[1].upper()} for {repeat_count} step(s).")
+            elif cmd == "transcript":
+                if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
+                    print("Usage: transcript <A/B>")
+                    continue
+                print_transcript(sim, tokens[1])
+                continue
             elif cmd == "speak":
                 if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
                     print("Usage: speak <A/B>")
                     continue
                 agent = sim.agent_a if tokens[1] == "a" else sim.agent_b
-                print(f"[SPEAK] Agent {tokens[1].upper()}: {agent.speak()}")
+                other_agent = sim.agent_b if tokens[1] == "a" else sim.agent_a
+                peer = _last_agent_utterance(other_agent)
+                print(f"[SPEAK] Agent {tokens[1].upper()}: {agent.speak(peer_utterance=peer)}")
+            elif cmd == "narrate":
+                if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
+                    print("Usage: narrate <A/B> [full]")
+                    continue
+                agent = sim.agent_a if tokens[1] == "a" else sim.agent_b
+                mm = get_memory_manager(agent)
+                if not mm:
+                    print(f"[ERROR] Could not access memory for agent {tokens[1].upper()}")
+                    continue
+                summary, coherence = mm.narrative_summary(short_sentences=3, n_traces=12)
+                print(f"[NARRATIVE SUMMARY] Agent {tokens[1].upper()}: {summary}")
+                # Optionally print the full recent narrative
+                if len(tokens) > 2 and tokens[2] == "full":
+                    frame = mm.narrative_frame(n_traces=24)
+                    if frame and frame.sentences:
+                        print("\n[ FULL NARRATIVE ]")
+                        for s in frame.sentences:
+                            print(f"  - {s}")
+            elif cmd == "goals":
+                if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
+                    print("Usage: goals <A/B>")
+                    continue
+                agent = sim.agent_a if tokens[1] == "a" else sim.agent_b
+                if not hasattr(agent, "intentional_frame"):
+                    print(f"[ERROR] Agent {tokens[1].upper()} has no intentional frame.")
+                    continue
+                frame = agent.intentional_frame
+                print(f"\n[ GOAL FRAME | AGENT {tokens[1].upper()} ]")
+                print(f"  Primary goal: {frame.primary_goal}")
+                print(f"  Current subgoal: {frame.current_subgoal()}")
+                print(f"  Subgoals: {', '.join(frame.subgoals)}")
+                print(f"  Persistence: {frame.persistence}/{frame.max_persistence}")
+                print(f"  Urgency: {frame.urgency:.3f}")
+                print(f"  Alignment: {frame.alignment:.3f}")
+                print(f"  Opportunity: {frame.opportunity:.3f}")
+                print(f"  Achieved: {frame.achieved}")
+                print(f"  Rationale: {frame.rationale}")
             elif cmd in {"feed", "help", "threaten", "isolate", "ignore"}:
                 if len(tokens) < 2 or tokens[1] not in {"a", "b"}:
                     print("Specify A or B, e.g. 'threaten A'")
@@ -316,8 +484,8 @@ def run_interactive(sim) -> None:
                 print("Unknown command. Type 'help' for options.")
                 continue
 
-            if cmd not in {"inspect", "status", "help", "salience", "identity"}:
-                print_agent_dialogue(sim)
+            if cmd not in {"inspect", "status", "help", "salience", "identity", "thoughts", "emotions", "somatic", "transcript", "peer", "goals"}:
+                print_agent_utterances(sim)
 
         except Exception as exc:
             print("\n[FATAL ERROR] Engine desync during command execution.")

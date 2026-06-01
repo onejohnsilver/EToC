@@ -76,10 +76,15 @@ class MetricSummary:
     affect_score: float
     self_model_score: float
     social_score: float
+    value_system_score: float
     recursion_score: float
     experience_score: float
     consciousness_score: float
     identity_score: float
+    narrative_coherence_score: float
+    intuition_reliability_score: float
+    meta_accuracy_score: float
+    peer_model_accuracy_score: float
     overall_adaptation_score: float
 
     def as_dict(self) -> Dict[str, float]:
@@ -90,10 +95,15 @@ class MetricSummary:
             "affect_score": self.affect_score,
             "self_model_score": self.self_model_score,
             "social_score": self.social_score,
+            "value_system_score": self.value_system_score,
             "recursion_score": self.recursion_score,
             "experience_score": self.experience_score,
             "consciousness_score": self.consciousness_score,
             "identity_score": self.identity_score,
+            "narrative_coherence_score": self.narrative_coherence_score,
+            "intuition_reliability_score": self.intuition_reliability_score,
+            "meta_accuracy_score": self.meta_accuracy_score,
+            "peer_model_accuracy_score": self.peer_model_accuracy_score,
             "overall_adaptation_score": self.overall_adaptation_score,
         }
 
@@ -139,12 +149,37 @@ def recursion_score(state: TheoryState) -> float:
     return clamp(state.recursive_integration, 0.0, 1.0)
 
 
+def value_system_score(score: float) -> float:
+    return clamp(score, 0.0, 1.0)
+
+
 def experience_score(state: TheoryState) -> float:
     return clamp(state.subjective_experience, 0.0, 1.0)
 
 
 def consciousness_score(state: TheoryState) -> float:
     return clamp(state.consciousness_index, 0.0, 1.0)
+
+
+def narrative_coherence_score(identity: IdentitySummary) -> float:
+    return clamp(identity.coherence, 0.0, 1.0)
+
+
+def intuition_reliability_score(state: TheoryState) -> float:
+    return clamp(0.50 * (1.0 - state.prediction_error) + 0.50 * state.predictive_precision, 0.0, 1.0)
+
+
+def meta_accuracy_score(state: TheoryState, identity: IdentitySummary) -> float:
+    score = (
+        0.35 * prediction_score(state)
+        + 0.30 * narrative_coherence_score(identity)
+        + 0.35 * intuition_reliability_score(state)
+    )
+    return clamp(score, 0.0, 1.0)
+
+
+def peer_model_accuracy_score(accuracy: float) -> float:
+    return clamp(accuracy, 0.0, 1.0)
 
 
 def identity_score(identity: IdentitySummary) -> float:
@@ -162,7 +197,11 @@ def identity_score(identity: IdentitySummary) -> float:
     return clamp(score, 0.0, 1.0)
 
 
-def overall_adaptation_score(state: TheoryState, identity: IdentitySummary) -> float:
+def overall_adaptation_score(
+    state: TheoryState,
+    identity: IdentitySummary,
+    raw_value_system_score: float = 0.0,
+) -> float:
     """
     A single high-level score for the current architecture.
 
@@ -170,16 +209,18 @@ def overall_adaptation_score(state: TheoryState, identity: IdentitySummary) -> f
     It is only a convenience summary.
     """
     score = (
-        0.18 * survival_score(state)
-        + 0.12 * stability_score(state)
-        + 0.12 * prediction_score(state)
-        + 0.10 * affect_score(state)
-        + 0.10 * self_model_score(state)
-        + 0.10 * social_score(state)
-        + 0.12 * recursion_score(state)
-        + 0.08 * experience_score(state)
-        + 0.10 * consciousness_score(state)
-        + 0.08 * identity_score(identity)
+        0.16 * survival_score(state)
+        + 0.10 * stability_score(state)
+        + 0.10 * prediction_score(state)
+        + 0.08 * affect_score(state)
+        + 0.08 * self_model_score(state)
+        + 0.08 * social_score(state)
+        + 0.10 * recursion_score(state)
+        + 0.07 * experience_score(state)
+        + 0.07 * consciousness_score(state)
+        + 0.06 * value_system_score(raw_value_system_score)
+        + 0.07 * identity_score(identity)
+        + 0.08 * meta_accuracy_score(state, identity)
     )
     return clamp(score, 0.0, 1.0)
 
@@ -255,7 +296,12 @@ def metric_averages(traces: Sequence[MemoryTrace]) -> Dict[str, float]:
 # ============================================================
 
 
-def summarize_state(state: TheoryState, identity: IdentitySummary) -> MetricSummary:
+def summarize_state(
+    state: TheoryState,
+    identity: IdentitySummary,
+    peer_model_accuracy: float = 0.0,
+    raw_value_system_score: float = 0.0,
+) -> MetricSummary:
     """One-stop summary of the current theory state."""
     return MetricSummary(
         survival_score=survival_score(state),
@@ -264,11 +310,16 @@ def summarize_state(state: TheoryState, identity: IdentitySummary) -> MetricSumm
         affect_score=affect_score(state),
         self_model_score=self_model_score(state),
         social_score=social_score(state),
+        value_system_score=value_system_score(raw_value_system_score),
         recursion_score=recursion_score(state),
         experience_score=experience_score(state),
         consciousness_score=consciousness_score(state),
         identity_score=identity_score(identity),
-        overall_adaptation_score=overall_adaptation_score(state, identity),
+        narrative_coherence_score=narrative_coherence_score(identity),
+        intuition_reliability_score=intuition_reliability_score(state),
+        meta_accuracy_score=meta_accuracy_score(state, identity),
+        peer_model_accuracy_score=peer_model_accuracy_score(peer_model_accuracy),
+        overall_adaptation_score=overall_adaptation_score(state, identity, raw_value_system_score),
     )
 
 
@@ -299,17 +350,21 @@ def compare_summaries(
         f"{label_a}_minus_{label_b}_affect": a.affect_score - b.affect_score,
         f"{label_a}_minus_{label_b}_self_model": a.self_model_score - b.self_model_score,
         f"{label_a}_minus_{label_b}_social": a.social_score - b.social_score,
+        f"{label_a}_minus_{label_b}_value_system": a.value_system_score - b.value_system_score,
         f"{label_a}_minus_{label_b}_recursion": a.recursion_score - b.recursion_score,
         f"{label_a}_minus_{label_b}_experience": a.experience_score - b.experience_score,
         f"{label_a}_minus_{label_b}_consciousness": a.consciousness_score - b.consciousness_score,
         f"{label_a}_minus_{label_b}_identity": a.identity_score - b.identity_score,
+        f"{label_a}_minus_{label_b}_narrative_coherence": a.narrative_coherence_score - b.narrative_coherence_score,
+        f"{label_a}_minus_{label_b}_intuition_reliability": a.intuition_reliability_score - b.intuition_reliability_score,
+        f"{label_a}_minus_{label_b}_meta_accuracy": a.meta_accuracy_score - b.meta_accuracy_score,
+        f"{label_a}_minus_{label_b}_peer_model_accuracy": a.peer_model_accuracy_score - b.peer_model_accuracy_score,
         f"{label_a}_minus_{label_b}_overall": a.overall_adaptation_score - b.overall_adaptation_score,
     }
 
 
 # ============================================================
 # Diagnostic ranking helpers
-# ============================================================
 
 
 def rank_layers(state: TheoryState, identity: IdentitySummary) -> List[Tuple[str, float]]:

@@ -75,12 +75,21 @@ class MemoryBank:
         self.traces.append(trace)
         self.traces = self.traces[-self.max_traces :]
 
-        # Salience Bank: Retain high-threat or high-error traces indefinitely.
-        # This acts as the orthogonal priority gate for the agent's prior distributions.
+        # Salience Bank: Retain high-threat or high-error traces as survival anchors.
         if trace.survival_loss > 0.40 or trace.prediction_error > 0.60 or trace.subjective_experience > 0.80:
             self.salient_traces.append(trace)
-            self.salient_traces = self.salient_traces[-self.max_salient :]
 
+        # Apply exponential decay to salient traces based on age.
+        # Older traumatic anchors fade over time so recovery is possible.
+        decayed_salient: List[MemoryTrace] = []
+        current_step = trace.step_index
+        for st in self.salient_traces:
+            age = max(0, current_step - st.step_index)
+            decay_factor = max(0.0, 1.0 - (age * 0.0015))
+            if decay_factor > 0.05:
+                decayed_salient.append(st)
+
+        self.salient_traces = decayed_salient[-self.max_salient :]
         self.identity = update_identity(self.identity, self.traces, self.salient_traces)
 
     def latest(self) -> Optional[MemoryTrace]:
@@ -143,19 +152,19 @@ def make_trace(state: TheoryState, note: str = "") -> MemoryTrace:
 
 def _weighted_mean(traces: Sequence[MemoryTrace], extract_fn: Callable[[MemoryTrace], float]) -> float:
     """
-    Computes an affectively weighted average. 
-    Traces with high survival threat or massive prediction errors exert a 
-    much stronger gravitational pull on the agent's identity and coherence.
+    Computes a recency-weighted average for identity summaries.
+    Recent traces have stronger influence while past experiences fade naturally.
     """
     if not traces:
         return 0.0
     
     total_weight = 0.0
     weighted_sum = 0.0
+    n = len(traces)
     
-    for t in traces:
-        # Base weight of 1.0, scaled exponentially by survival threat and prediction error
-        weight = 1.0 + (t.survival_loss * 5.0) + (t.prediction_error * 3.0)
+    for i, t in enumerate(traces):
+        recency_factor = 0.85 ** (n - i - 1)
+        weight = recency_factor
         val = extract_fn(t)
         weighted_sum += val * weight
         total_weight += weight
@@ -235,8 +244,10 @@ class MemoryManager:
     Higher-level memory interface.
     """
 
-    def __init__(self, max_traces: int = 128):
+    def __init__(self, max_traces: int = 128, disable_salience: bool = False, disable_identity: bool = False):
         self.bank = MemoryBank(max_traces=max_traces)
+        self.disable_salience = disable_salience
+        self.disable_identity = disable_identity
 
     def store(self, state: TheoryState, note: str = "") -> MemoryTrace:
         trace = make_trace(state, note=note)
@@ -248,9 +259,13 @@ class MemoryManager:
         
     def salient_traces(self, n: int = 5) -> List[MemoryTrace]:
         """Provides access to the most severe historical events for active inference."""
+        if self.disable_salience:
+            return []
         return self.bank.salient(n)
 
     def identity_summary(self) -> IdentitySummary:
+        if self.disable_identity:
+            return IdentitySummary()
         return self.bank.identity
 
     def export_state_memory(self) -> List[Dict[str, float]]:
@@ -286,6 +301,37 @@ class MemoryManager:
         ][-self.bank.max_salient :]
         
         self.bank.identity = update_identity(self.bank.identity, self.bank.traces, self.bank.salient_traces)
+
+    # ----------------------------
+    # Narrative-friendly helpers
+    # ----------------------------
+    def narrative_frame(self, n_traces: int = 12):
+        """Build a NarrativeFrame from the most recent `n_traces`.
+
+        This is a thin integration point with `core_narrative` and keeps
+        the memory manager as the authoritative source of chronological
+        traces.
+        """
+        try:
+            # import locally to avoid circular imports at module load time
+            from core_narrative import build_narrative_from_traces
+        except Exception:
+            return None
+
+        traces = self.recent_traces(n_traces)
+        return build_narrative_from_traces(traces, max_sentences=n_traces)
+
+    def narrative_summary(self, short_sentences: int = 3, n_traces: int = 12) -> Tuple[str, float]:
+        """Return a short textual summary and coherence score for recent memory."""
+        frame = self.narrative_frame(n_traces=n_traces)
+        if frame is None:
+            return ("Narrative unavailable.", 0.0)
+        try:
+            from core_narrative import summarize_narrative
+
+            return (summarize_narrative(frame, max_sentences=short_sentences), frame.coherence)
+        except Exception:
+            return ("Narrative construction failed.", frame.coherence)
 
 
 # ============================================================
